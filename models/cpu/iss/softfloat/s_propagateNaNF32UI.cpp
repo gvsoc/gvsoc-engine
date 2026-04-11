@@ -1,1 +1,0 @@
-8086-SSE/s_propagateNaNF32UI.c

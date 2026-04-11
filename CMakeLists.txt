@@ -187,18 +187,22 @@ if (NOT APPLE)
     add_subdirectory(dpi-wrapper)
 endif()
 add_subdirectory(engine)
-add_subdirectory(models)
 
 set(is_first true)
+set(module_index 0)
 
 foreach(subdir ${GVSOC_MODULES})
 
-    if (NOT ${is_first})
-        if(IS_DIRECTORY ${subdir})
-            get_filename_component(name ${subdir} NAME)
-            message(STATUS ${subdir})
-            if(EXISTS ${subdir}/CMakeLists.txt)
-                add_subdirectory(${subdir} ${CMAKE_CURRENT_BINARY_DIR}/${name}/models)
+    if(NOT is_first)
+        if(IS_DIRECTORY "${subdir}")
+            message(STATUS "subdir: ${subdir} bin: ${CMAKE_CURRENT_BINARY_DIR}/module_${module_index}")
+
+            if(EXISTS "${subdir}/CMakeLists.txt")
+                add_subdirectory(
+                    "${subdir}"
+                    "${CMAKE_CURRENT_BINARY_DIR}/module_${module_index}"
+                )
+                math(EXPR module_index "${module_index} + 1")
             endif()
         endif()
     endif()
@@ -233,3 +237,4 @@ foreach(tree_src ${TREE_SOURCES})
         LIBRARY DESTINATION lib)
 endforeach()
 
+install(DIRECTORY python/ DESTINATION python)
