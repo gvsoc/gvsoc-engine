@@ -39,6 +39,7 @@
 #include <unistd.h>
 #include <vp/proxy.hpp>
 #include <vp/controller.hpp>
+#include <vp/clock/clock_engine.hpp>
 #include "vp/top.hpp"
 
 
@@ -311,6 +312,43 @@ void gv::GvProxySession::proxy_loop()
                     this->gvsoc->step(duration, false, (void *)atoll(req.c_str()));
                 }
             }
+            else if (words[0] == "step_cycles")
+            {
+                if (words.size() != 3)
+                {
+                    fprintf(stderr, "This command requires 2 arguments: step_cycles <clock_index> <count>");
+                }
+                else
+                {
+                    int clock_idx = strtol(words[1].c_str(), NULL, 0);
+                    int64_t count = strtoll(words[2].c_str(), NULL, 0);
+                    auto &clocks = engine->get_clock_engines();
+                    if (clock_idx >= 0 && clock_idx < (int)clocks.size())
+                    {
+                        vp::ClockEngine *clock = clocks[clock_idx];
+                        int64_t period = clock->get_period();
+                        if (period > 0)
+                        {
+                            int64_t duration = count * period;
+                            this->gvsoc->step(duration, false, (void *)atoll(req.c_str()));
+                        }
+                        else
+                        {
+                            // Period is 0 (clock not running), reply immediately
+                            std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                            dprintf(reply_fd, "req=%s;msg=%ld\n", req.c_str(), engine->get_time());
+                            lock.unlock();
+                        }
+                    }
+                    else
+                    {
+                        // Invalid clock index, reply immediately
+                        std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                        dprintf(reply_fd, "req=%s;msg=%ld\n", req.c_str(), engine->get_time());
+                        lock.unlock();
+                    }
+                }
+            }
             else if (words[0] == "stop")
             {
                 this->gvsoc->stop();
@@ -358,6 +396,25 @@ void gv::GvProxySession::proxy_loop()
                     {
                         dprintf(reply_fd, "req=%s;msg=0x0\n", req.c_str());
                     }
+                    lock.unlock();
+                }
+                else if (words[0] == "get_clock_domains")
+                {
+                    std::string result;
+                    for (auto clock : engine->get_clock_engines())
+                    {
+                        clock->sync();
+                        if (!result.empty())
+                            result += "|";
+                        char buf[512];
+                        snprintf(buf, sizeof(buf), "%s period=%ld frequency=%ld cycles=%ld",
+                            clock->get_path().c_str(), clock->get_period(),
+                            clock->get_frequency(), clock->get_cycles());
+                        result += buf;
+                    }
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=%s\n", req.c_str(), result.c_str());
+                    fflush(reply_sock);
                     lock.unlock();
                 }
                 else if (words[0] == "component")

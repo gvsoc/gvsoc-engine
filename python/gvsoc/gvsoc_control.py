@@ -387,6 +387,43 @@ class Proxy(object):
 
             return result.replace('\n', '')
 
+    def step_cycles(self, clock_index: int, count: int):
+        """Step by exactly N cycles of the specified clock domain.
+
+        :param clock_index: Index of the clock domain (from get_clock_domains order)
+        :param count: Number of cycles to step
+        :return: The new simulation timestamp in picoseconds
+        """
+        return self._send_cmd('step_cycles %d %d' % (clock_index, count))
+
+    def get_clock_domains(self):
+        """Get all clock domains in the simulation.
+
+        Returns a list of dicts with keys: path, period, frequency, cycles.
+        Period is in picoseconds, frequency in Hz.
+        """
+        result = self._send_cmd('get_clock_domains')
+        result = result.replace('\n', '')
+        if not result:
+            return []
+        domains = []
+        for entry in result.split('|'):
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = entry.split()
+            if len(parts) < 4:
+                continue
+            path = parts[0]
+            info = {}
+            info['path'] = path
+            for kv in parts[1:]:
+                if '=' in kv:
+                    k, v = kv.split('=', 1)
+                    info[k] = int(v)
+            domains.append(info)
+        return domains
+
 
     def register_exit_callback(self, callback, *kargs, **kwargs):
         """Register exit callback

@@ -64,6 +64,19 @@ namespace vp
         void start();
         void reset(bool active);
 
+        std::string handle_command(gv::GvProxy *proxy, FILE *req_file, FILE *reply_file,
+            std::vector<std::string> args, std::string req) override;
+
+        /**
+         * @brief Step by a number of cycles
+         *
+         * Enqueues a clock event that will pause the time engine after exactly
+         * the specified number of cycles, regardless of frequency changes.
+         * The callback is invoked when the cycles have elapsed.
+         */
+        typedef void (*step_cycles_callback_t)(void *arg);
+        void step_cycles(int64_t count, step_cycles_callback_t callback = nullptr, void *callback_arg = nullptr);
+
         /**
          * @brief Get current cycles
          *
@@ -139,6 +152,7 @@ namespace vp
 
     private:
         static void stalled_event_handler(vp::Block *, ClockEvent *event);
+        static void step_cycles_handler(vp::Block *__this, ClockEvent *event);
 
         void update();
 
@@ -219,6 +233,11 @@ namespace vp
 
         vp::ClockEvent apply_frequency_event;
         int64_t frequency_to_be_applied;
+
+        // Cycle-based stepping
+        vp::ClockEvent *step_cycles_event = nullptr;
+        step_cycles_callback_t step_cycles_callback = nullptr;
+        void *step_cycles_callback_arg = nullptr;
 
         // Statistics
         vp::StatScalar stat_start_cycle;

@@ -15,7 +15,7 @@ parser.add_argument("--run", dest="run", action="store_true", help="Run until th
 args = parser.parse_args()
 
 
-gv = gvsoc.Telnet_proxy(args.host, args.port)
+gv = gvsoc.Proxy(args.host, args.port)
 
 for trace in args.trace_add:
     gv.trace_add(trace)

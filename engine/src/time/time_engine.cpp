@@ -242,3 +242,8 @@ void vp::TimeEngine::flush_all()
 {
     this->top->flush_all();
 }
+
+void vp::TimeEngine::register_clock_engine(vp::ClockEngine *engine)
+{
+    this->clock_engines.push_back(engine);
+}

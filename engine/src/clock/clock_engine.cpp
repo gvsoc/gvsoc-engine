@@ -549,6 +549,7 @@ vp::ClockEngine::ClockEngine(vp::ComponentConf &config)
     apply_frequency_event(this, &vp::ClockEngine::apply_frequency_handler)
 {
     this->time_engine = config.time_engine;
+    this->time_engine->register_clock_engine(this);
     delayed_queue = NULL;
     current_cycle = 0;
 
@@ -592,5 +593,45 @@ vp::ClockEngine::ClockEngine(vp::ComponentConf &config)
             int64_t end = this->stat_end_cycle.get();
             this->stat_duration_cycles.set(end > start ? end - start : 0);
         });
+    }
+}
+
+
+std::string vp::ClockEngine::handle_command(gv::GvProxy *proxy, FILE *req_file, FILE *reply_file,
+    std::vector<std::string> args, std::string req)
+{
+    if (args.size() > 0 && args[0] == "info")
+    {
+        this->sync();
+        char buffer[256];
+        snprintf(buffer, sizeof(buffer), "period=%ld frequency=%ld cycles=%ld",
+            this->get_period(), this->get_frequency(), this->get_cycles());
+        return std::string(buffer);
+    }
+
+    return "";
+}
+
+
+void vp::ClockEngine::step_cycles(int64_t count, step_cycles_callback_t callback, void *callback_arg)
+{
+    if (this->step_cycles_event == nullptr)
+    {
+        this->step_cycles_event = this->event_new(&ClockEngine::step_cycles_handler);
+    }
+    this->step_cycles_callback = callback;
+    this->step_cycles_callback_arg = callback_arg;
+    this->step_cycles_event->enqueue(count);
+}
+
+
+void vp::ClockEngine::step_cycles_handler(vp::Block *__this, vp::ClockEvent *event)
+{
+    vp::ClockEngine *_this = (vp::ClockEngine *)__this;
+    _this->time_engine->pause();
+    if (_this->step_cycles_callback)
+    {
+        _this->step_cycles_callback(_this->step_cycles_callback_arg);
+        _this->step_cycles_callback = nullptr;
     }
 }

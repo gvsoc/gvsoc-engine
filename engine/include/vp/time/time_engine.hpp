@@ -31,6 +31,7 @@ namespace gv
 namespace vp
 {
     class BlockTime;
+    class ClockEngine;
     class Component;
 
     class TimeEngine
@@ -80,6 +81,9 @@ namespace vp
          * accessing the models.
          */
         inline void update(int64_t time);
+
+        void register_clock_engine(vp::ClockEngine *engine);
+        std::vector<vp::ClockEngine *> &get_clock_engines() { return this->clock_engines; }
 
         /**
          * @brief DEPRECATED
@@ -137,5 +141,8 @@ namespace vp
         // Set to true when exec() returns after processing a stop request.
         // Used by the signal handler to detect whether the engine is stuck in a callback.
         volatile bool run_returned = false;
+
+        // Registered clock engines
+        std::vector<vp::ClockEngine *> clock_engines;
     };
 };
