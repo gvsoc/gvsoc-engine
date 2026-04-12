@@ -111,6 +111,10 @@ class GvsocConsole(cmd.Cmd):
         self.notifications = queue.Queue()
         self.clock_domain = None  # Selected clock domain path
         self.clock_domains_cache = None  # Cached list of clock domains
+        self.breakpoints = {}  # id -> {'addr': int}
+        self.next_bp_id = 1
+        self.iss_path = '**/chip/soc/fc/core'
+        self.iss_ptr = None  # cached ISS component pointer
         self._update_prompt()
 
     def preloop(self):
@@ -185,9 +189,24 @@ class GvsocConsole(cmd.Cmd):
 
         Units: ps, ns, us, ms (default: ps)
         """
+        self._resume_if_halted()
+        arg = arg.strip()
         if not arg:
-            self.proxy.run()
-            print("Simulation running.")
+            if self.breakpoints:
+                # Step in small chunks; each step returns a reply so we can check
+                # for breakpoint hits between chunks. Use 100us chunks for responsiveness.
+                print("Running until breakpoint or end...")
+                while True:
+                    self._step(100_000_000, quiet=True)  # 100us chunks
+                    if self._is_breakpoint_hit():
+                        self._check_breakpoint_hit()
+                        break
+                    if self.proxy.reader.sim_has_exited:
+                        print("Simulation exited.")
+                        break
+            else:
+                self.proxy.run()
+                print("Simulation running.")
         else:
             ps, err = parse_duration(arg)
             if err:
@@ -205,6 +224,7 @@ class GvsocConsole(cmd.Cmd):
 
         Units: ps, ns, us, ms (default: ps)
         """
+        self._resume_if_halted()
         if not arg:
             ps = 1000  # 1 ns default
         else:
@@ -225,6 +245,7 @@ class GvsocConsole(cmd.Cmd):
         Use 'clock select <path>' to select a clock domain first.
         Stepping is cycle-accurate even if the clock frequency changes mid-step.
         """
+        self._resume_if_halted()
         if self.clock_domain is None:
             print("Error: no clock domain selected. Use 'clock list' and 'clock select <path>'.")
             return
@@ -259,6 +280,7 @@ class GvsocConsole(cmd.Cmd):
         self._update_prompt()
         time_str = format_time(timestamp) if timestamp is not None else "unknown"
         print(f"Stepped {count} cycle(s). Time: {time_str}")
+        self._check_breakpoint_hit()
 
     def do_stop(self, arg):
         """Stop the simulation."""
@@ -689,6 +711,155 @@ class GvsocConsole(cmd.Cmd):
             print("OK")
 
     # ──────────────────────────────────────────────
+    # Breakpoints
+    # ──────────────────────────────────────────────
+
+    def _get_iss(self):
+        """Get or resolve the ISS component pointer."""
+        if self.iss_ptr is None:
+            ptr = self.proxy._get_component(self.iss_path)
+            if not ptr or ptr.strip() == '' or ptr.strip() == '0x0':
+                print(f"Error: ISS component not found at '{self.iss_path}'")
+                print("Use 'set iss <path>' to configure the ISS component path.")
+                return None
+            self.iss_ptr = ptr.strip()
+        return self.iss_ptr
+
+    def _iss_cmd(self, cmd):
+        """Send a command to the ISS component. Returns the response or None on error."""
+        ptr = self._get_iss()
+        if ptr is None:
+            return None
+        result = self.proxy._send_cmd(f'component {ptr} {cmd}')
+        return result.strip() if result else None
+
+    def _is_breakpoint_hit(self):
+        """Check if a breakpoint was hit (returns True/False without printing)."""
+        if not self.breakpoints:
+            return False
+        result = self._iss_cmd('breakpoint_status')
+        return result is not None and 'hit=1' in result
+
+    def _check_breakpoint_hit(self):
+        """Check if a breakpoint was hit and print a message."""
+        if not self.breakpoints:
+            return
+        result = self._iss_cmd('breakpoint_status')
+        if result and 'hit=1' in result:
+            # Parse address
+            addr = None
+            for part in result.split():
+                if part.startswith('addr='):
+                    addr = int(part.split('=')[1], 0)
+            # Find matching breakpoint
+            bp_id = None
+            if addr is not None:
+                for bid, bp in self.breakpoints.items():
+                    if bp['addr'] == addr:
+                        bp_id = bid
+                        break
+            if bp_id is not None:
+                print(f"Breakpoint {bp_id} hit at 0x{addr:08X}")
+            elif addr is not None:
+                print(f"Breakpoint hit at 0x{addr:08X}")
+
+    def _resume_if_halted(self):
+        """Resume the ISS if it is halted at a breakpoint."""
+        if not self.breakpoints:
+            return
+        result = self._iss_cmd('breakpoint_status')
+        if result and 'hit=1' in result:
+            self._iss_cmd('resume')
+
+    def do_break(self, arg):
+        """Set a breakpoint at an address.
+
+        Usage:
+          break *0x1c010746    - break at address (with * prefix)
+          break 0x1c010746     - break at address (without prefix)
+
+        The simulation will pause when the PC reaches this address.
+        """
+        if not arg:
+            print("Usage: break <address>")
+            return
+
+        # Strip optional leading *
+        addr_str = arg.strip().lstrip('*')
+        try:
+            addr = int(addr_str, 0)
+        except ValueError:
+            print(f"Error: invalid address '{arg}'")
+            return
+
+        result = self._iss_cmd(f'breakpoint_insert 0x{addr:x}')
+        if result is None:
+            return
+
+        bp_id = self.next_bp_id
+        self.next_bp_id += 1
+        self.breakpoints[bp_id] = {'addr': addr}
+        print(f"Breakpoint {bp_id} at 0x{addr:08X}")
+
+    def do_delete(self, arg):
+        """Delete breakpoint(s).
+
+        Usage:
+          delete 1      - delete breakpoint 1
+          delete        - delete all breakpoints
+        """
+        if not arg:
+            # Delete all
+            for bp_id, bp in list(self.breakpoints.items()):
+                self._iss_cmd(f'breakpoint_remove 0x{bp["addr"]:x}')
+            self.breakpoints.clear()
+            print("All breakpoints deleted.")
+            return
+
+        try:
+            bp_id = int(arg)
+        except ValueError:
+            print(f"Error: invalid breakpoint id '{arg}'")
+            return
+
+        if bp_id not in self.breakpoints:
+            print(f"Error: no breakpoint {bp_id}")
+            return
+
+        bp = self.breakpoints.pop(bp_id)
+        self._iss_cmd(f'breakpoint_remove 0x{bp["addr"]:x}')
+        print(f"Breakpoint {bp_id} deleted.")
+
+    def do_info(self, arg):
+        """Show information.
+
+        Usage:
+          info breakpoints   - list all breakpoints
+        """
+        parts = arg.split()
+        if not parts:
+            print("Usage: info breakpoints")
+            return
+
+        if parts[0] in ('breakpoints', 'break', 'b'):
+            if not self.breakpoints:
+                print("No breakpoints set.")
+                return
+            print(f"{'ID':<6} {'Address'}")
+            print("-" * 24)
+            for bp_id, bp in sorted(self.breakpoints.items()):
+                print(f"{bp_id:<6} 0x{bp['addr']:08X}")
+        else:
+            print(f"Unknown info subcommand: {parts[0]}")
+
+    def complete_info(self, text, line, begidx, endidx):
+        parts = line.split()
+        if len(parts) == 2 or (len(parts) == 1 and not text):
+            subcmds = ['breakpoints']
+            return [s for s in subcmds if s.startswith(text)]
+        return []
+
+    # ──────────────────────────────────────────────
     # Settings
     # ──────────────────────────────────────────────
 
@@ -697,11 +868,13 @@ class GvsocConsole(cmd.Cmd):
 
         Usage:
           set router <path>   - set default router path for mem commands
+          set iss <path>      - set ISS component path for breakpoints
         """
         parts = arg.split(None, 1)
         if len(parts) < 2:
             print("Current settings:")
             print(f"  router = {self.router_path}")
+            print(f"  iss    = {self.iss_path}")
             return
 
         option, value = parts[0], parts[1]
@@ -709,14 +882,18 @@ class GvsocConsole(cmd.Cmd):
             self.router_path = value
             self.router = None  # Force re-creation
             print(f"Router path set to: {value}")
+        elif option == 'iss':
+            self.iss_path = value
+            self.iss_ptr = None  # Force re-resolution
+            print(f"ISS path set to: {value}")
         else:
             print(f"Unknown option: {option}")
-            print("Available: router")
+            print("Available: router, iss")
 
     def complete_set(self, text, line, begidx, endidx):
         parts = line.split()
         if len(parts) == 2 or (len(parts) == 1 and not text):
-            options = ['router']
+            options = ['router', 'iss']
             return [o for o in options if o.startswith(text)]
         return []
 
@@ -759,7 +936,7 @@ class GvsocConsole(cmd.Cmd):
     # Internal Helpers
     # ──────────────────────────────────────────────
 
-    def _step(self, ps, label=None):
+    def _step(self, ps, label=None, quiet=False):
         """Step the simulation by ps picoseconds and print the result."""
         reply = self.proxy._send_cmd('step %d' % ps)
         # The reply is the new timestamp
@@ -770,10 +947,12 @@ class GvsocConsole(cmd.Cmd):
             timestamp = None
         self._drain_notifications()
         self._update_prompt()
-        if label is None:
-            label = format_time(ps)
-        time_str = format_time(timestamp) if timestamp is not None else "unknown"
-        print(f"Stepped {label}. Time: {time_str}")
+        if not quiet:
+            if label is None:
+                label = format_time(ps)
+            time_str = format_time(timestamp) if timestamp is not None else "unknown"
+            print(f"Stepped {label}. Time: {time_str}")
+            self._check_breakpoint_hit()
 
     def _on_exit(self, status):
         """Callback when simulation exits (called from reader thread)."""
