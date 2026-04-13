@@ -6,6 +6,7 @@
 
 """GVSoC Interactive Console — a REPL for controlling a running simulation."""
 
+import bisect
 import cmd
 import os
 import queue
@@ -115,6 +116,8 @@ class GvsocConsole(cmd.Cmd):
         self.next_bp_id = 1
         self.iss_path = '**/chip/soc/fc/core'
         self.iss_ptr = None  # cached ISS component pointer
+        self.symbols = {}  # name -> addr
+        self.sym_addrs = []  # sorted list of (addr, name) for reverse lookup
         self._update_prompt()
 
     def preloop(self):
@@ -193,11 +196,13 @@ class GvsocConsole(cmd.Cmd):
         arg = arg.strip()
         if not arg:
             if self.breakpoints:
-                # Step in small chunks; each step returns a reply so we can check
-                # for breakpoint hits between chunks. Use 100us chunks for responsiveness.
+                # Step in small chunks until breakpoint hit or sim exits.
+                # Each chunk must complete before we can check breakpoint status
+                # (proxy locks the engine during component queries).
+                # 1us chunks balance responsiveness vs overhead.
                 print("Running until breakpoint or end...")
                 while True:
-                    self._step(100_000_000, quiet=True)  # 100us chunks
+                    self._step(1_000_000, quiet=True)  # 1us chunks
                     if self._is_breakpoint_hit():
                         self._check_breakpoint_hit()
                         break
@@ -758,10 +763,15 @@ class GvsocConsole(cmd.Cmd):
                     if bp['addr'] == addr:
                         bp_id = bid
                         break
-            if bp_id is not None:
-                print(f"Breakpoint {bp_id} hit at 0x{addr:08X}")
-            elif addr is not None:
-                print(f"Breakpoint hit at 0x{addr:08X}")
+            if addr is not None:
+                sym = self._addr_to_symbol(addr)
+                loc = f"0x{addr:08X}"
+                if sym:
+                    loc += f" <{sym}>"
+                if bp_id is not None:
+                    print(f"Breakpoint {bp_id} hit at {loc}")
+                else:
+                    print(f"Breakpoint hit at {loc}")
 
     def _resume_if_halted(self):
         """Resume the ISS if it is halted at a breakpoint."""
@@ -772,24 +782,22 @@ class GvsocConsole(cmd.Cmd):
             self._iss_cmd('resume')
 
     def do_break(self, arg):
-        """Set a breakpoint at an address.
+        """Set a breakpoint at an address or symbol.
 
         Usage:
-          break *0x1c010746    - break at address (with * prefix)
-          break 0x1c010746     - break at address (without prefix)
+          break *0x1c010746    - break at address
+          break 0x1c010746     - break at address
+          break main           - break at symbol (requires symbol load)
 
         The simulation will pause when the PC reaches this address.
         """
         if not arg:
-            print("Usage: break <address>")
+            print("Usage: break <address|symbol>")
             return
 
-        # Strip optional leading *
-        addr_str = arg.strip().lstrip('*')
-        try:
-            addr = int(addr_str, 0)
-        except ValueError:
-            print(f"Error: invalid address '{arg}'")
+        addr = self._resolve_addr(arg)
+        if addr is None:
+            print(f"Error: cannot resolve '{arg}' (not a valid address or known symbol)")
             return
 
         result = self._iss_cmd(f'breakpoint_insert 0x{addr:x}')
@@ -845,10 +853,11 @@ class GvsocConsole(cmd.Cmd):
             if not self.breakpoints:
                 print("No breakpoints set.")
                 return
-            print(f"{'ID':<6} {'Address'}")
-            print("-" * 24)
+            print(f"{'ID':<6} {'Address':<14} {'Symbol'}")
+            print("-" * 40)
             for bp_id, bp in sorted(self.breakpoints.items()):
-                print(f"{bp_id:<6} 0x{bp['addr']:08X}")
+                sym = self._addr_to_symbol(bp['addr']) or ''
+                print(f"{bp_id:<6} 0x{bp['addr']:08X}     {sym}")
         elif parts[0] in ('registers', 'reg', 'r'):
             self.do_reg('')
         else:
@@ -915,6 +924,145 @@ class GvsocConsole(cmd.Cmd):
                         parts.append(f"{name:>4} = 0x{val:08X}")
                 print('  '.join(parts))
             print(f"  pc = 0x{regs['pc']:08X}")
+
+    # ──────────────────────────────────────────────
+    # Symbol Table
+    # ──────────────────────────────────────────────
+
+    def _addr_to_symbol(self, addr):
+        """Resolve an address to the nearest symbol name + offset."""
+        if not self.sym_addrs:
+            return None
+        idx = bisect.bisect_right(self.sym_addrs, (addr, '')) - 1
+        if idx < 0:
+            return None
+        sym_addr, sym_name = self.sym_addrs[idx]
+        offset = addr - sym_addr
+        if offset == 0:
+            return sym_name
+        elif offset < 0x10000:  # reasonable offset
+            return f"{sym_name}+0x{offset:x}"
+        return None
+
+    def _resolve_addr(self, arg):
+        """Resolve an argument to an address: hex literal or symbol name."""
+        arg = arg.strip().lstrip('*')
+        # Try hex/decimal literal first
+        try:
+            return int(arg, 0)
+        except ValueError:
+            pass
+        # Try symbol lookup
+        if arg in self.symbols:
+            return self.symbols[arg]
+        return None
+
+    def do_symbol(self, arg):
+        """Load symbols from an ELF binary.
+
+        Usage:
+          symbol load <path>     - load symbol table from ELF file
+          symbol lookup <name>   - look up a symbol address
+          symbol addr <addr>     - find symbol at address
+          symbol list [pattern]  - list symbols (optional grep pattern)
+        """
+        parts = arg.split(None, 1)
+        if not parts:
+            print("Usage: symbol load|lookup|addr|list ...")
+            return
+
+        subcmd = parts[0]
+        subarg = parts[1].strip() if len(parts) > 1 else ''
+
+        if subcmd == 'load':
+            if not subarg:
+                print("Usage: symbol load <elf_path>")
+                return
+            path = os.path.expanduser(subarg)
+            if not os.path.isfile(path):
+                print(f"Error: file not found: {path}")
+                return
+            try:
+                from elftools.elf.elffile import ELFFile
+                from elftools.elf.sections import SymbolTableSection
+            except ImportError:
+                print("Error: pyelftools not installed (pip install pyelftools)")
+                return
+            try:
+                with open(path, 'rb') as f:
+                    elf = ELFFile(f)
+                    count = 0
+                    for section in elf.iter_sections():
+                        if isinstance(section, SymbolTableSection):
+                            for sym in section.iter_symbols():
+                                if sym.name and sym.entry['st_value'] != 0 and \
+                                   sym.entry['st_info']['type'] in ('STT_FUNC', 'STT_OBJECT', 'STT_NOTYPE'):
+                                    self.symbols[sym.name] = sym.entry['st_value']
+                                    count += 1
+                # Build sorted address list for reverse lookup
+                self.sym_addrs = sorted(
+                    [(addr, name) for name, addr in self.symbols.items()],
+                    key=lambda x: x[0]
+                )
+                print(f"Loaded {count} symbols from {path}")
+            except Exception as e:
+                print(f"Error reading ELF: {e}")
+
+        elif subcmd == 'lookup':
+            if not subarg:
+                print("Usage: symbol lookup <name>")
+                return
+            if subarg in self.symbols:
+                print(f"{subarg} = 0x{self.symbols[subarg]:08X}")
+            else:
+                # Partial match
+                matches = [n for n in self.symbols if subarg in n]
+                if matches:
+                    for m in sorted(matches)[:20]:
+                        print(f"  {m} = 0x{self.symbols[m]:08X}")
+                    if len(matches) > 20:
+                        print(f"  ... ({len(matches)} total matches)")
+                else:
+                    print(f"Symbol not found: {subarg}")
+
+        elif subcmd == 'addr':
+            if not subarg:
+                print("Usage: symbol addr <address>")
+                return
+            try:
+                addr = int(subarg, 0)
+            except ValueError:
+                print(f"Error: invalid address '{subarg}'")
+                return
+            sym = self._addr_to_symbol(addr)
+            if sym:
+                print(f"0x{addr:08X} = {sym}")
+            else:
+                print(f"No symbol at 0x{addr:08X}")
+
+        elif subcmd == 'list':
+            if not self.symbols:
+                print("No symbols loaded. Use 'symbol load <elf>'.")
+                return
+            items = sorted(self.symbols.items())
+            if subarg:
+                items = [(n, a) for n, a in items if subarg in n]
+            for name, addr in items[:50]:
+                print(f"  0x{addr:08X}  {name}")
+            if len(items) > 50:
+                print(f"  ... ({len(items)} total, showing first 50)")
+
+        else:
+            print(f"Unknown symbol subcommand: {subcmd}")
+
+    def complete_symbol(self, text, line, begidx, endidx):
+        parts = line.split()
+        if len(parts) == 2 or (len(parts) == 1 and not text):
+            subcmds = ['load', 'lookup', 'addr', 'list']
+            return [s for s in subcmds if s.startswith(text)]
+        if len(parts) >= 2 and parts[1] == 'lookup' and self.symbols:
+            return [n for n in sorted(self.symbols) if n.startswith(text)][:20]
+        return []
 
     # ──────────────────────────────────────────────
     # Settings
