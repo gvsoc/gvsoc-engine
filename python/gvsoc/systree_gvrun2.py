@@ -190,11 +190,18 @@ class Component(gvrun.target.SystemTreeNode):
             parent.__add_component(name, self)
 
         if config is not None:
+            from gvrun.systree import get_attribute_arg_value
             for f in fields(config):
                 # Only process the fields which has been assigned
                 if hasattr(config, f.name):
                     value = getattr(config, f.name)
                     if isinstance(value, (int, bool, str)):
+                        # Check for attribute override using the component path
+                        override = get_attribute_arg_value(
+                            self.get_path() + '/' + f.name)
+                        if override is not None:
+                            value = type(value)(override)
+                            setattr(config, f.name, value)
                         self.add_property(f.name, value)
 
 
