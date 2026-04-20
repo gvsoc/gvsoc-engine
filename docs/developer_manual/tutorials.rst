@@ -1940,7 +1940,7 @@ router, and then start interacting:
 .. code-block:: python
 
     import argparse
-    import gv.gvsoc_control as gvsoc
+    import gvsoc.gvsoc_control as gvsoc
     import threading
     import time
 
@@ -1980,7 +1980,7 @@ GVSOC must be started in proxy mode with this option: ::
 This will block its execution until the script is connected. This also displays the port we have to use
 on script side.
 
-On script side, we have to make sure *gv/gvsoc_control.py* is in PYTHONPATH. Then we can launch it with: ::
+On script side, we have to make sure *gvsoc/gvsoc_control.py* is in PYTHONPATH. Then we can launch it with: ::
 
     ./gvcontrol --host=localhost --port=42951
 

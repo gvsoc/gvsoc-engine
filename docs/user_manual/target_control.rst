@@ -139,11 +139,11 @@ To inject memory-mapped accesses from the Python script into the simulated syste
 a proxy router must first be retrieved. This proxy router is a special model connected to the main
 system interconnect to convert access requests from the script into real system accesses.
 
-This reference is retrieved by instantiating the *gv.gvsoc_control.Router* class:
+This reference is retrieved by instantiating the *gvsoc.gvsoc_control.Router* class:
 
 .. code-block:: python
 
-    router = gv.gvsoc_control.Router(gv)
+    router = gvsoc.gvsoc_control.Router(gv)
 
 Accesses can then be performed by calling *mem_read* and *mem_write* on this instance:
 
@@ -166,14 +166,14 @@ The target control feature allows interaction with the I2S pads to inject or ext
 A dedicated device model called *testbench* is connected to the simulated chip's pads and interacts
 with the Python script.
 
-To interact with it, instantiate the *gv.gvsoc_control.Testbench* class similarly to the *Router*
+To interact with it, instantiate the *gvsoc.gvsoc_control.Testbench* class similarly to the *Router*
 class:
 
 .. code-block:: python
 
-    testbench = gv.gvsoc_control.Testbench(gv)
+    testbench = gvsoc.gvsoc_control.Testbench(gv)
 
-Then, instantiate the *gv.gvsoc_control.Testbench_i2s* class for each I2S interface to be
+Then, instantiate the *gvsoc.gvsoc_control.Testbench_i2s* class for each I2S interface to be
 controlled:
 
 .. code-block:: python

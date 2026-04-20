@@ -17,5 +17,5 @@ be used to handle all these interactions.
 API Reference
 .............
 
-.. automodule:: gv.gvsoc_control
+.. automodule:: gvsoc.gvsoc_control
    :members:

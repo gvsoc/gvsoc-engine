@@ -238,3 +238,8 @@ foreach(tree_src ${TREE_SOURCES})
 endforeach()
 
 install(DIRECTORY python/ DESTINATION python)
+
+install(
+    FILES python/gvsoc/gvsoc_control.py
+    DESTINATION  python/gv
+    )
