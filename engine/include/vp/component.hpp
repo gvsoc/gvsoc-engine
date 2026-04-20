@@ -117,6 +117,7 @@ namespace vp
             if (this->tree_config != nullptr)
             {
                 memcpy(&cfg, this->tree_config, sizeof(T));
+                this->apply_runtime_overrides(&cfg);
             }
         }
 
@@ -183,6 +184,21 @@ namespace vp
          * @brief Check whether this component has a compiled tree config.
          */
         bool has_tree_config() const { return this->tree_config != nullptr; }
+
+        /**
+         * @brief Overlay run-time-settable fields from the JSON property
+         * wire onto a typed config struct pointed to by ``cfg``.
+         *
+         * Invoked automatically by the templated ``Component(config, cfg)``
+         * constructor after the ``memcpy`` from ``tree_config``. Walks the
+         * RuntimeField table attached to this component's tree node and,
+         * for each entry, fetches the JSON property and writes it at the
+         * given offset inside ``cfg``.
+         *
+         * Strings are ``strdup``-ed and live for the duration of the
+         * simulation (single platform lifetime).
+         */
+        void apply_runtime_overrides(void *cfg);
 
         /**
          * @brief Get the launcher

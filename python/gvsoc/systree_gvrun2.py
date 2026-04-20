@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-from dataclasses import fields
+from dataclasses import fields, is_dataclass
 import logging
 import gvsoc.json_tools as js
 import collections
@@ -28,6 +28,7 @@ import gvrun.target
 import gvsoc.gui
 import hashlib
 import rich.table
+from gvrun.runtime import is_runtime_annotation
 from gvrun.parameter import TargetParameter
 
 
@@ -558,6 +559,34 @@ class Component(gvrun.target.SystemTreeNode):
 
         return result
 
+    def _sync_runtime_fields_to_properties(self):
+        """Copy current values of ``Annotated[T, Runtime]`` fields from the
+        attached Config instance into ``self.properties`` so they flow
+        through the JSON wire. The engine's Component constructor then
+        overlays them onto the typed config struct at construction time.
+
+        Existing properties win — an explicit ``add_property`` call from
+        the generator takes precedence over the Config field value.
+        """
+        from typing import get_type_hints
+        config = getattr(self, '_component_config', None)
+        if config is None or not is_dataclass(config):
+            return
+        try:
+            type_hints = get_type_hints(type(config), include_extras=True)
+        except Exception:
+            type_hints = {}
+        for f in fields(config):
+            resolved = type_hints.get(f.name, f.type)
+            if not is_runtime_annotation(resolved):
+                continue
+            if f.name in self.properties:
+                continue
+            value = getattr(config, f.name, None)
+            if value is None:
+                continue
+            self.properties[f.name] = value
+
     def get_config(self):
         """Generates and return the system configuration.
 
@@ -574,6 +603,8 @@ class Component(gvrun.target.SystemTreeNode):
 
         if not self.finalize_done:
             self.__finalize()
+
+        self._sync_runtime_fields_to_properties()
 
         config = {}
 

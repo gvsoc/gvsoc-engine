@@ -390,6 +390,51 @@ vp::Component *vp::Component::new_component(std::string name, js::Config *config
     return instance;
 }
 
+void vp::Component::apply_runtime_overrides(void *cfg)
+{
+    if (this->tree_node == nullptr || this->tree_node->runtime_fields == nullptr)
+    {
+        return;
+    }
+
+    const vp::RuntimeField *table = this->tree_node->runtime_fields;
+    int n = this->tree_node->num_runtime_fields;
+    js::Config *js = this->get_js_config();
+    char *base = static_cast<char *>(cfg);
+
+    for (int i = 0; i < n; i++)
+    {
+        const vp::RuntimeField &f = table[i];
+        js::Config *node = (js != nullptr) ? js->get(f.name) : nullptr;
+        if (node == nullptr)
+        {
+            continue;
+        }
+
+        void *slot = base + f.offset;
+        switch (f.type)
+        {
+            case vp::RUNTIME_STRING:
+            {
+                std::string s = node->get_str();
+                *reinterpret_cast<const char **>(slot) = strdup(s.c_str());
+                break;
+            }
+            case vp::RUNTIME_BOOL:
+                *reinterpret_cast<bool *>(slot) = node->get_bool();
+                break;
+            case vp::RUNTIME_INT64:
+                *reinterpret_cast<int64_t *>(slot) =
+                    static_cast<int64_t>(node->get_int());
+                break;
+            case vp::RUNTIME_DOUBLE:
+                *reinterpret_cast<double *>(slot) = node->get_double();
+                break;
+        }
+    }
+}
+
+
 vp::Component::Component(vp::ComponentConf &config)
     : Block(config.parent, config.name, config.time_engine, config.trace_engine,
     config.power_engine, config.memcheck),

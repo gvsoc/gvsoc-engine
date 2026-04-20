@@ -37,6 +37,32 @@ struct TreeBinding
 };
 
 /**
+ * @brief Scalar type of a runtime-settable config field.
+ */
+enum RuntimeFieldType
+{
+    RUNTIME_STRING,
+    RUNTIME_BOOL,
+    RUNTIME_INT64,
+    RUNTIME_DOUBLE,
+};
+
+/**
+ * @brief Metadata for one run-time-settable field of a component config.
+ *
+ * Generated at compile time from fields marked ``Annotated[T, Runtime]``.
+ * At component construction, the engine uses this table to overlay the
+ * field's value from the JSON property wire onto the component's typed
+ * config struct.
+ */
+struct RuntimeField
+{
+    const char *name;           // Property name (matches JSON key)
+    unsigned int offset;        // Offset of the field inside the config struct
+    RuntimeFieldType type;      // Scalar type for the overlay
+};
+
+/**
  * @brief Node in the compiled component tree.
  *
  * Generated per-target by Python. Describes the hierarchy of components
@@ -46,12 +72,14 @@ struct TreeBinding
 struct ComponentTreeNode
 {
     const char *name;                    // Component name (e.g. "rom", "bank_0")
-    const void *config;                  // Pointer to constexpr config struct, or nullptr
+    const void *config;                  // Pointer to config struct (static or constexpr), or nullptr
     const ComponentTreeNode *children;   // Array of child nodes (nullptr if leaf)
     int num_children;                    // Number of children
     const char *vp_component;            // Module name (.so), or nullptr for default
     const TreeBinding *bindings;         // Array of bindings, or nullptr
     int num_bindings;                    // Number of bindings
+    const RuntimeField *runtime_fields;  // Runtime-settable field table, or nullptr
+    int num_runtime_fields;              // Number of runtime-settable fields
 
     /**
      * @brief Find a child node by name.
