@@ -28,17 +28,19 @@ Compiling and running the application can be done with *make all run*. The run t
 adds our local directory to the list of target dirs so that it can find our system: ::
 
     run:
-	    gvrun --target-dir=$(CURDIR) --target=my_system --work-dir=$(BUILDDIR) --parameter binary=$(BUILDDIR)/test run $(runner_args)
+	    gvsoc --target-dir=$(CURDIR) --target=my_system --work-dir=$(BUILDDIR) --binary=$(BUILDDIR)/test run $(runner_args)
 
 Now, in order to build a system scratch, we need to write a python generator of the system which
 will assemble all the pieces together.
 
-First we need to declare our system as a gvrun target, which is the runner used to run GVSOC
+First we need to declare our system as a gapy target, which is the runner used to run GVSOC
 simulation:
 
 .. code-block:: python
 
     import gvsoc.runner
+
+    GAPY_TARGET = True
 
     class Target(gvsoc.runner.Target):
 
@@ -46,7 +48,9 @@ simulation:
             super(Target, self).__init__(parser, options,
                 model=Rv64, description="RV64 virtual board")
 
-The target should always inherit from *gvsoc.runner.Target*.
+The target should aways inherit from *gvsoc.runner.Target* and we should always put
+*GAPY_TARGET = True* in the file so that gapy knows this is a valid target when we put it on
+gapy command-line.
 
 The *model* argument should give the class of our system that we will describe now.
 
@@ -181,7 +185,7 @@ our binary execution.
 
     gdbserver.gdbserver.Gdbserver(self, 'gdbserver')
 
-Now we can compile GVSOC with *make gvsoc*. Since it will execute our script to know which components
+Now we can compile gvsoc with *make gvsoc*. Since it will execute our script to know which components
 should be built, it is possible that we get some Python errors at this point.
 
 Then we can run the simulation with "make all run".
@@ -554,7 +558,7 @@ handler, in order to show information about the request:
         _this->trace.msg(vp::TraceLevel::DEBUG, "Received request at offset 0x%lx, size 0x%lx, is_write %d\n",
             req->get_addr(), req->get_size(), req->get_is_write());
 
-Once GVSOC has been recompiled, we can then activate all the traces of our component with this command: ::
+Once gvsoc has been recompiled, we can then activate all the traces of our component with this command: ::
 
     make all run runner_args="--trace=my_comp"
 
@@ -760,7 +764,7 @@ Which should displays: ::
 
 
 Now let's have a look at a way of generating the register map. For that we will use the *regmap-gen*
-script which comes with GVSOC and allows generating the register map code from a register map described
+script which comes with gvsoc and allows geenrating the register map code from a register map described
 in a markdown file.
 
 Lets' first add this rule in the makefile to generate the register map: ::
@@ -1871,7 +1875,7 @@ system:
             chip1 = Rv64(self, 'chip1', parser, options)
 
 
-    # This is the top target that gvrun will instantiate
+    # This is the top target that gapy will instantiate
     class Target(gvsoc.runner.Target):
 
         def __init__(self, parser, options):
@@ -1907,10 +1911,10 @@ this requires a more sophisticated runtime to do so.
 16 - How to control GVSOC from a python script
 ..............................................
 
-The goal of this tutorial is to show how to connect a Python script to GVSOC and control it from the script.
+The goal of this tutorial is to show how to connect a Python script to gvsoc and control it frmo the script.
 
-The script will be used to run GVSOC in step mode and inject some memory accesses in order to synchronize
-with the simulated binary. This can often be used to connect some external tool to GVSOC and interact with it.
+The script will be used to run gvsoc in step mode and inject some memory accesses in order to synchronize
+with the simulated binary. This can often be used to connect some external tool to gvsoc and interact with it.
 
 We modify the simulated binary so that it write a special value to a specific location and wait for it
 to change. On Python side, the script will do the reverse:
@@ -1930,7 +1934,7 @@ to change. On Python side, the script will do the reverse:
     printf("Leaving\n");
 
 
-The Python script needs to instantiate a GVSOC proxy from *gvsoc_control.py*, then the proxy
+The Python script needs to instantiate a gvsoc proxy from *gvsoc_control.py*, then the proxy
 router, and then start interacting:
 
 .. code-block:: python
@@ -2032,7 +2036,7 @@ which inherits from *gv::Io_user* and must overload a few methods to handle the 
     public:
         int run(std::string config_path);
 
-        // This gets called when an access from GVSOC side is reaching us
+        // This gets called when an access from gvsoc side is reaching us
         void access(gv::Io_request *req);
         // This gets called when one of our access gets granted
         void grant(gv::Io_request *req);
@@ -2140,7 +2144,7 @@ GVSOC should first be compiled for rv64 with this command: ::
 
 The Linux kernel can be taken from cva6 sdk, and the following command run from it: ::
 
-    gvrun --target rv64 --parameter binary=install64/spike_fw_payload.elf run
+    gvsoc --target=rv64 --binary install64/spike_fw_payload.elf  run
 
 
 19 - How to test a model with a standalone testbench

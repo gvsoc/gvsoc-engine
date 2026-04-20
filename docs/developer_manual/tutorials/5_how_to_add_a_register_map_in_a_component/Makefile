@@ -1,5 +1,6 @@
 include ../utils/rt.mk
 
+GVSOC_ROOT = ../../../../../..
 GVSOC_WORKDIR ?= $(CURDIR)/build
 ifdef BUILDDIR
 FULL_BUILDDIR := $(GVSOC_WORKDIR)/$(BUILDDIR)
@@ -11,14 +12,14 @@ export PYTHONPATH:=$(CURDIR)/../../../../../core/models:$(PYTHONPATH)
 
 clean:
 	rm -rf $(FULL_BUILDDIR)/test
-	make -C ../../../../.. TARGETS=my_system MODULES=$(CURDIR) BUILDDIR=$(FULL_BUILDDIR)/build INSTALLDIR=$(FULL_BUILDDIR)/install $(OPTIONS) clean
+	make -C $(GVSOC_ROOT) TARGETS=my_system MODULES=$(CURDIR) BUILDDIR=$(FULL_BUILDDIR)/build INSTALLDIR=$(FULL_BUILDDIR)/install $(OPTIONS) clean
 
 all:
 	mkdir -p $(FULL_BUILDDIR)/test
 	riscv64-unknown-elf-gcc -o $(FULL_BUILDDIR)/test/test main.c $(RT_SRCS) $(RT_FLAGS)
 
 gvsoc:
-	make -C ../../../../.. TARGETS=my_system MODULES=$(CURDIR) BUILDDIR=$(FULL_BUILDDIR)/build INSTALLDIR=$(FULL_BUILDDIR)/install $(OPTIONS) build
+	make -C $(GVSOC_ROOT) TARGETS=my_system MODULES=$(CURDIR) BUILDDIR=$(FULL_BUILDDIR)/build INSTALLDIR=$(FULL_BUILDDIR)/install $(OPTIONS) build
 
 run:
 	$(FULL_BUILDDIR)/install/bin/gvrun --target-dir=$(CURDIR) --target=my_system --work-dir=$(FULL_BUILDDIR)/work --parameter binary=$(FULL_BUILDDIR)/test/test run $(runner_args)
@@ -27,4 +28,4 @@ prepare:
 	cp solution/* .
 
 regmap:
-	../../../../../core/bin/regmap-gen --input-md regmap.md --header headers/mycomp
+	$(GVSOC_ENGINE)/bin/regmap-gen --input-md regmap.md --header headers/mycomp
