@@ -279,7 +279,7 @@ class Runner():
             models_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             tree_lib = os.path.join(models_dir, '..', 'lib', f'libplatform_tree_{lib_name}.so')
             tree_lib = os.path.normpath(tree_lib)
-            if os.path.exists(tree_lib):
+            if os.path.exists(tree_lib) and self._platform_tree_matches_systree(tree_lib):
                 gvsoc_config.set('platform_tree', tree_lib)
 
         if args.gdbserver:
@@ -345,6 +345,37 @@ class Runner():
         for child in getattr(component, 'components', {}).values():
             classes.update(self._collect_config_classes(child))
         return classes
+
+    def _platform_tree_matches_systree(self, tree_lib_path):
+        """Return True iff the installed ``.so`` matches the live systree.
+
+        The build-time ``tree_gen.generate_tree_cpp`` writes a SHA256
+        sidecar (``<tree>.tree.cpp.sig``) which CMake installs next to the
+        ``.so`` as ``<lib>.so.sig``. At run time we re-render the tree
+        from the current systree (which may differ from the build-time
+        one — typically because ``--attribute`` changed something
+        structural like a tile count) and compare the two hashes. On
+        mismatch we skip ``platform_tree`` so the engine falls back to
+        the JSON path instead of dlopen'ing a stale tree that points to
+        children the runtime systree no longer contains.
+        """
+        sig_path = tree_lib_path + '.sig'
+        if not os.path.exists(sig_path):
+            # No sidecar — be conservative: a missing .sig probably means
+            # an old/partial install, in which case the .so could carry
+            # any layout. Skip it.
+            return False
+        try:
+            from gvrun.tree_gen import compute_signature
+        except ImportError:
+            return False
+        try:
+            with open(sig_path) as fp:
+                installed_sig = fp.read().strip()
+            live_sig = compute_signature(self.target)
+        except Exception:
+            return False
+        return installed_sig == live_sig
 
     def _generate_platform_tree(self, target, builddir, component_file):
         """Generate config headers and compiled component tree .cpp."""

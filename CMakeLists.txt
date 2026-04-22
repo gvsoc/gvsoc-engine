@@ -235,6 +235,14 @@ foreach(tree_src ${TREE_SOURCES})
         ${CMAKE_CURRENT_SOURCE_DIR}/engine/include)
     install(TARGETS ${lib_target}
         LIBRARY DESTINATION lib)
+    # Install the SHA256 sidecar written by tree_gen.generate_tree_cpp.
+    # Used by the launcher (runner_gvrun2) to detect a stale .so when the
+    # runtime systree has been reshaped (e.g. via --attribute) and
+    # transparently fall back to the JSON-based instantiation path.
+    install(FILES "${tree_src}.sig"
+        DESTINATION lib
+        RENAME "libplatform_tree_${lib_name}.so.sig"
+        OPTIONAL)
 endforeach()
 
 install(DIRECTORY python/ DESTINATION python)
