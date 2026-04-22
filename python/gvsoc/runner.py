@@ -424,13 +424,8 @@ if os.environ.get('USE_GVRUN') is None:
                 component_file = self.gapy_target.get_args().component_file
                 self.target.gen_all(builddir, installdir)
 
-                # Always generate config headers for components that have them
-                # Only generate the tree .cpp if the Target has a config dataclass
-                import dataclasses
-                target_config = getattr(self.gapy_target, 'config', None)
-                has_typed_config = target_config is not None and dataclasses.is_dataclass(target_config)
                 self._generate_config_headers(self.target, builddir)
-                if has_typed_config and component_file is not None:
+                if component_file is not None:
                     self._generate_tree_cpp(self.target, component_file)
 
                 generated_components = self.target.get_generated_components()
