@@ -32,6 +32,15 @@ vp::MappingTreeEntry::MappingTreeEntry(int id, std::string name, js::Config *con
     this->lowest_base = base;
 }
 
+vp::MappingTreeEntry::MappingTreeEntry(int id, std::string name, uint64_t base, uint64_t size)
+{
+    this->id = id;
+    this->name = name;
+    this->base = base;
+    this->size = size;
+    this->lowest_base = base;
+}
+
 vp::MappingTreeEntry::MappingTreeEntry(uint64_t base, vp::MappingTreeEntry *left,
     vp::MappingTreeEntry *right)
 {
@@ -44,6 +53,42 @@ vp::MappingTreeEntry::MappingTreeEntry(uint64_t base, vp::MappingTreeEntry *left
 vp::MappingTree::MappingTree(vp::Trace *trace)
 {
     this->trace = trace;
+}
+
+void vp::MappingTree::insert(int id, std::string name, uint64_t base, uint64_t size)
+{
+    vp::MappingTreeEntry *entry = new vp::MappingTreeEntry(id, name, base, size);
+
+    if (name == "error")
+    {
+        this->error_entry = entry;
+    }
+    else if (entry->size == 0)
+    {
+        this->default_entry = entry;
+    }
+    else
+    {
+        vp::MappingTreeEntry *current = this->first_map_entry;
+        vp::MappingTreeEntry *prev = NULL;
+
+        while (current && current->base < entry->base)
+        {
+            prev = current;
+            current = current->next;
+        }
+
+        if (prev == NULL)
+        {
+            entry->next = this->first_map_entry;
+            this->first_map_entry = entry;
+        }
+        else
+        {
+            entry->next = current;
+            prev->next = entry;
+        }
+    }
 }
 
 void vp::MappingTree::insert(int id, std::string name, js::Config *config)

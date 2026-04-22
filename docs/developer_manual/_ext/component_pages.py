@@ -161,14 +161,47 @@ def _call_str_arg(call: ast.Call, kw: str, pos: int | None) -> str | None:
 
 
 def _preceding_comment(src_lines: list[str], lineno: int) -> str:
-    """Return the ``#`` comment directly above ``lineno`` (1-indexed), if any."""
+    """Return the ``#`` comment block directly above ``lineno`` (1-indexed).
+
+    Walks upwards from ``lineno - 1`` collecting contiguous ``#`` comment
+    lines. The block is contiguous: a blank or non-comment line breaks it.
+    Within the block, a *bare* ``#`` line (no text after the hash) is
+    treated as a paragraph break, so authors can write multi-paragraph
+    descriptions::
+
+        # First paragraph spanning
+        # several lines.
+        #
+        # Second paragraph here.
+        testset.new_make_test('foo', flags='CASE=foo')
+
+    Returns an RST string with paragraphs separated by ``\\n\\n``. The
+    leading ``#`` and the single space typically following it are stripped.
+    """
     idx = lineno - 2  # line above, 0-indexed
-    if idx < 0 or idx >= len(src_lines):
+    raw: list[str] = []
+    while idx >= 0:
+        stripped = src_lines[idx].strip()
+        if stripped.startswith('#') and not stripped.startswith('#!'):
+            raw.insert(0, stripped.lstrip('#').lstrip())
+            idx -= 1
+        else:
+            break
+    if not raw:
         return ''
-    stripped = src_lines[idx].strip()
-    if stripped.startswith('#') and not stripped.startswith('#!'):
-        return stripped.lstrip('#').strip()
-    return ''
+    # Re-flow into paragraphs split on bare comment lines.
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for line in raw:
+        if not line:
+            if current:
+                paragraphs.append(' '.join(current))
+                current = []
+        else:
+            current.append(line)
+    if current:
+        paragraphs.append(' '.join(current))
+    return '\n\n'.join(paragraphs)
 
 
 # --------------------------------------------------------------------------- #
@@ -240,22 +273,14 @@ def _render_page(entry: dict, roots: list[Path], repo_root: Path) -> tuple[str, 
             lines += [heading, '~' * max(len(heading), 4), '']
             lines += [f'Source: ``{rel}``.', '']
             if tests:
-                lines += [
-                    '.. list-table::',
-                    '   :header-rows: 1',
-                    '   :widths: 40 40 20',
-                    '',
-                    '   * - Name',
-                    '     - Flags',
-                    '     - Description',
-                ]
                 for name, flags, desc, _ in tests:
-                    lines += [
-                        f'   * - ``{_rst_escape(name)}``',
-                        f'     - {"``" + _rst_escape(flags) + "``" if flags else ""}',
-                        f'     - {_rst_escape(desc)}',
-                    ]
-                lines.append('')
+                    lines += [name, '^' * max(len(name), 4), '']
+                    if flags:
+                        lines += [f'*Flags:* ``{_rst_escape(flags)}``', '']
+                    if desc:
+                        lines += [desc, '']
+                    else:
+                        lines += ['*(no description)*', '']
             else:
                 lines += ['No tests found.', '']
 

@@ -330,12 +330,28 @@ if os.environ.get('USE_GVRUN') is None:
         def _collect_config_classes(self, component):
             """Walk the component tree and collect unique Config classes for header generation."""
             from dataclasses import is_dataclass
+            try:
+                from gvrun.config_gen import get_config_fields
+            except ImportError:
+                get_config_fields = None
+
             classes = {}
+
+            def _add(cls):
+                if cls is None or cls.__name__ in classes:
+                    return
+                classes[cls.__name__] = cls
+                if get_config_fields is None:
+                    return
+                # Recursively pull in element classes of list-of-Config fields
+                # so their headers get generated alongside the parent's.
+                for fld in get_config_fields(cls):
+                    if fld['cpp_type'] == 'list':
+                        _add(fld['list_elem_cls'])
+
             config = getattr(component, '_component_config', None)
             if config is not None and is_dataclass(config):
-                cls = type(config)
-                if cls.__name__ not in classes:
-                    classes[cls.__name__] = cls
+                _add(type(config))
             for child in getattr(component, 'components', {}).values():
                 classes.update(self._collect_config_classes(child))
             return classes

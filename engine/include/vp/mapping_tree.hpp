@@ -32,6 +32,7 @@ namespace vp {
 
     public:
         MappingTreeEntry(int id, std::string name, js::Config *config);
+        MappingTreeEntry(int id, std::string name, uint64_t base, uint64_t size);
         MappingTreeEntry(uint64_t base, MappingTreeEntry *left, MappingTreeEntry *right);
 
         std::string name;
@@ -51,6 +52,7 @@ namespace vp {
     public:
         MappingTree(vp::Trace *trace);
         void insert(int id, std::string name, js::Config *config);
+        void insert(int id, std::string name, uint64_t base, uint64_t size);
         void build();
         MappingTreeEntry *get(uint64_t base, uint64_t size, bool is_write);
 

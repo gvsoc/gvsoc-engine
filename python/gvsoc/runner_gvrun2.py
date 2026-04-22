@@ -260,14 +260,21 @@ class Runner():
         self.full_config, self.gvsoc_config_path = gen_config(
             args, { 'target': self.target.get_config() }, cosim_mode)
 
-        # Set the platform tree library path based on target name
+        # Set the platform tree library path based on target name. Must mirror
+        # the sanitisation done by CMake (gvsoc/engine/CMakeLists.txt) so the
+        # ``--target=<name>`` here resolves to the same .so name produced at
+        # build time. CMake first turns the gapy target token into a config
+        # base name with ``,`` -> ``_``, ``/`` -> ``.``, ``:`` -> ``_``, then
+        # collapses any remaining non-identifier characters to ``_`` for the
+        # library name.
         target_name = getattr(args, 'target', None) or getattr(gapy_target, 'name', None)
         if target_name:
             import re
-            # Strip inline parameters (e.g. "spatz_v2:param=val" -> "spatz_v2")
-            if ':' in target_name:
-                target_name = target_name.split(':')[0]
-            lib_name = re.sub(r'[^a-zA-Z0-9_]', '_', target_name)
+            cfg_base = (target_name
+                .replace(',', '_')
+                .replace('/', '.')
+                .replace(':', '_'))
+            lib_name = re.sub(r'[^a-zA-Z0-9_]', '_', cfg_base)
             gvsoc_config = self.full_config.get('target/gvsoc')
             models_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             tree_lib = os.path.join(models_dir, '..', 'lib', f'libplatform_tree_{lib_name}.so')
