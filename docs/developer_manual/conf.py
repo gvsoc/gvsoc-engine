@@ -104,3 +104,28 @@ breathe_projects = {
     "gvsoc": "doxygen/xml"
 }
 breathe_default_project = "gvsoc"
+
+
+# -- Coverage report copy ----------------------------------------------------
+#
+# Copy the lcov / genhtml report tree into the Sphinx build output so
+# the "view" links emitted by the component pages (pointing at
+# ``../../coverage-report/<abs-path>.gcov.html``) resolve under the
+# published docs. The source location is the directory passed via
+# ``GVSOC_DOC_COVERAGE_HTML`` (the Makefile sets it to
+# ``$(abspath $(COV_REPORT_DIR))``). No-op when the env var is unset
+# or points at a non-existent directory.
+
+def _copy_coverage_report(app, exception):
+    import shutil
+    if exception is not None:
+        return
+    src = os.environ.get('GVSOC_DOC_COVERAGE_HTML')
+    if not src or not os.path.isdir(src):
+        return
+    dst = os.path.join(app.outdir, 'coverage-report')
+    shutil.copytree(src, dst, dirs_exist_ok=True)
+
+
+def setup(app):
+    app.connect('build-finished', _copy_coverage_report)

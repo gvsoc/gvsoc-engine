@@ -3,4 +3,8 @@ __pycache__/
 *sw[p,o]
 cscope*
 /docs/_build/
+/docs/user_manual/_build/
+/docs/developer_manual/_build/
+/docs/developer_manual/doxygen/
+/docs/developer_manual/components/_generated/
 /.vscode/
