@@ -63,7 +63,8 @@ if os.environ.get('USE_GVRUN') is None:
 
         gvsoc_config.set('systemc', full_config.get('**/require_systemc') is not None)
         gvsoc_config.set('werror', args.werror)
-        gvsoc_config.set('events/use-external-dumper', args.gui and not cosim_mode)
+        gvsoc_config.set('events/use-external-dumper',
+            (args.gui or args.gui2 or args.gui3) and not cosim_mode)
         gvsoc_config.set('wunconnected-padfun', args.w_unconnected_padfun)
         gvsoc_config.set('memcheck', args.memcheck)
         gvsoc_config.set('power', args.power)
@@ -79,7 +80,7 @@ if os.environ.get('USE_GVRUN') is None:
 
         gvsoc_config.set('traces/float_hex', args.trace_float_hex)
 
-        if args.vcd or args.gui:
+        if args.vcd or args.gui or args.gui2 or args.gui3:
             gvsoc_config.set('events/enabled', True)
 
         if args.vcd or args.gtkw:
@@ -87,6 +88,7 @@ if os.environ.get('USE_GVRUN') is None:
 
         for event in args.events:
             gvsoc_config.set('events/include_regex', event)
+
 
         for tag in args.event_tags:
             gvsoc_config.set('events/tags', tag)
@@ -952,7 +954,8 @@ else:
 
             gvsoc_config.set('systemc', full_config.get('**/require_systemc') is not None)
             gvsoc_config.set('werror', args.werror)
-            gvsoc_config.set('events/use-external-dumper', args.gui and not cosim_mode)
+            gvsoc_config.set('events/use-external-dumper',
+                (args.gui or args.gui2 or args.gui3) and not cosim_mode)
             gvsoc_config.set('wunconnected-padfun', args.w_unconnected_padfun)
             gvsoc_config.set('memcheck', args.memcheck)
             gvsoc_config.set('power', args.power)
@@ -968,7 +971,7 @@ else:
 
             gvsoc_config.set('traces/float_hex', args.trace_float_hex)
 
-            if args.vcd or args.gui:
+            if args.vcd or args.gui or args.gui2 or args.gui3:
                 gvsoc_config.set('events/enabled', True)
 
             if args.vcd or args.gtkw:

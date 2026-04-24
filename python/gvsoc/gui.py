@@ -82,6 +82,52 @@ class SignalGenFunctionFromBinary(object):
             "binaries": self.binaries
         }
 
+class SignalGenAll(object):
+    """Catch-all dynamic signal generator.
+
+    Emits a `signals_generate` entry of type `all`. At runtime the GUI
+    timeline subscribes to trace creation events matching the given prefix
+    and auto-builds the signal tree from their paths. Used by dumper-style
+    components (utils.fsdb_dumper, ...) that inject external waveforms
+    whose signal list is not known at config-generation time.
+    """
+
+    def __init__(self, comp, parent, signal_path, prefix=""):
+        self.config = {
+            "type": "all",
+            "signal_path": signal_path,
+            "prefix": prefix,
+        }
+        parent.gen_signals.append(self)
+
+    def get(self):
+        return self.config
+
+
+class SignalGenGlob(object):
+    """Glob-based dynamic signal generator.
+
+    Emits a `signals_generate` entry of type `glob`. At runtime the GUI
+    timeline matches every new trace path against `pattern` (fnmatch, with
+    FNM_PATHNAME semantics -- '*' does not cross '/') and places matches
+    under `signal_path` in the GUI signal tree. Intended for explicit,
+    SimVision-style organisation of signals into custom groups.
+    """
+
+    def __init__(self, comp, parent, pattern, signal_path, display=None):
+        self.config = {
+            "type": "glob",
+            "pattern": pattern,
+            "signal_path": signal_path,
+        }
+        if display is not None:
+            self.config["display"] = display
+        parent.gen_signals.append(self)
+
+    def get(self):
+        return self.config
+
+
 class SignalGenThreads(object):
     def __init__(self, comp, parent, name, pc_signal, function_gen, binary_info):
         thread = Signal(comp, parent, name='threads', path='threads',
@@ -343,3 +389,166 @@ class GuiConfig(Signal):
         config['signals_generate'] = self.get_childs_gen_signals()
 
         fd.write(json.dumps(config, indent=4))
+
+
+class WaveLayout(object):
+    """Organise signals into a user-defined group hierarchy for the GUI.
+
+    A small helper to arrange signals in the GVSoC GUI timeline into
+    arbitrary nested groups, independent of the underlying trace paths.
+    Entries pair a group-path (a list of nested group names) with an
+    fnmatch-style glob pattern that the runtime matches against trace
+    paths at display time.
+
+    Typical usage:
+
+        from gvsoc.gui import WaveLayout
+
+        w = WaveLayout()
+        for i in range(8):
+            w.add(["cores", f"core_{i}", "fpu_0"],
+                  f"/tb_top/dut/CORE[{i}]/core_region_i/i_snitch_cc/i_riscv_core/i_riscv_fpu_wrapper/*")
+            w.add(["cores", f"core_{i}", "core"],
+                  f"/tb_top/dut/CORE[{i}]/core_region_i/i_snitch_cc/i_riscv_core/*")
+        w.add(["top"], "/tb_top/dut/*")
+
+        w.save("my_layout.json")
+
+    The layout is consumed as a sequence of `signals_generate` entries of
+    type 'glob'; components that accept a `layout=` parameter load it via
+    `WaveLayout.load()`, which also accepts a Python script that builds a
+    WaveLayout at module scope (the script runs with `__name__` set to a
+    private sentinel so an `if __name__ == "__main__": ...` save stanza at
+    the bottom is skipped).
+    """
+
+    def __init__(self):
+        self.entries = []
+        self.element_sizes = {}
+
+    def element_size(self, signal_path, size):
+        """Override the auto-chunking width for a wide signal.
+
+        When a trace is exposed as a flat 1-D variable but actually
+        represents N elements of M bits (e.g. a 2D packed array flattened
+        to a single `foo[1535:0]` of 128 x 12-bit elements), set the
+        element size so consumers can split the signal at element
+        boundaries instead of the default 64-bit chunks.
+
+        Parameters
+        ----------
+        signal_path : str
+            Full trace path of the wide signal including the trailing
+            bit-range suffix, e.g.
+            ``"/tb_top/dut/u_acu_queue_wrap/u_acu_queue/push_elem_q[1535:0]"``.
+        size : int
+            Element width in bits, capped at 64.
+        """
+        if size <= 0 or size > 64:
+            raise ValueError("element size must be in [1, 64]")
+        self.element_sizes[signal_path] = int(size)
+
+    def add(self, group_path, pattern, display=None):
+        """Add an entry mapping a glob pattern to a GUI group path.
+
+        Parameters
+        ----------
+        group_path : list[str]
+            Ordered list of group names, e.g. ["cores", "core_0", "fpu_0"].
+            Each becomes a nested node in the GUI signal tree.
+        pattern : str
+            fnmatch-style glob over trace paths, with shell-like semantics
+            ('*' does not cross '/'). Matches are placed under `group_path`.
+            Character classes like `[0]` stay literal -- fnmatch interprets
+            them as classes but that matches the same characters, so a
+            pattern of the form `CORE[0]` works as-is.
+        display : dict | None
+            Optional override, e.g. `{"type": "box", "format": "dec"}` or
+            `{"type": "pulse"}`. Defaults are auto-picked from trace width
+            (1-bit -> pulse, else -> hex box).
+        """
+        if not isinstance(group_path, (list, tuple)):
+            raise TypeError("group_path must be a list of group names")
+        self.entries.append({
+            "group_path": list(group_path),
+            "pattern": pattern,
+            "display": display,
+        })
+
+    def add_regex(self, group_path, pattern, display=None):
+        """Reserved for future use; emits the same glob entry today."""
+        self.add(group_path, pattern, display=display)
+
+    def to_signals_generate(self, root_signal_path=""):
+        """Return the list of signals_generate entries ready for the GUI.
+
+        Parameters
+        ----------
+        root_signal_path : str
+            Absolute path in the GUI signal tree under which every group
+            path is rooted. Empty string to root at the signal tree itself.
+        """
+        out = []
+        for e in self.entries:
+            if root_signal_path:
+                full = root_signal_path.rstrip("/") + "/" + "/".join(e["group_path"])
+            else:
+                full = "/".join(e["group_path"])
+            entry = {
+                "type": "glob",
+                "pattern": e["pattern"],
+                "signal_path": full,
+            }
+            if e["display"] is not None:
+                entry["display"] = e["display"]
+            out.append(entry)
+        return out
+
+    def save(self, path):
+        """Write the layout to `path` as JSON, suitable for a component's
+        `layout=` parameter."""
+        with open(path, "w") as f:
+            json.dump({
+                "entries": [
+                    {"group_path": e["group_path"],
+                     "pattern": e["pattern"],
+                     "display": e["display"]}
+                    for e in self.entries
+                ],
+                "element_sizes": self.element_sizes,
+            }, f, indent=2)
+
+    @classmethod
+    def load(cls, path):
+        """Load a layout from `path`.
+
+        Accepts either a JSON file saved with `WaveLayout.save()` or a
+        Python script that constructs a WaveLayout at module scope. For
+        .py scripts the module is executed with `__name__` set to a
+        private sentinel so an `if __name__ == "__main__": ...` stanza at
+        the bottom (used when the same script is run standalone to
+        produce a JSON) is skipped. Returns the first WaveLayout instance
+        found in the script's globals.
+        """
+        if str(path).endswith(".py"):
+            import runpy
+            ns = runpy.run_path(str(path), run_name="_gvsoc_wave_layout")
+            for value in ns.values():
+                if isinstance(value, cls):
+                    return value
+            raise RuntimeError(
+                f"No WaveLayout instance found at module scope in {path}")
+
+        with open(path) as f:
+            data = json.load(f)
+        w = cls()
+        # New object form: {"entries": [...], "element_sizes": {...}}
+        # Legacy list form: [ ... ]  (no element_sizes)
+        if isinstance(data, dict):
+            entries = data.get("entries", [])
+            w.element_sizes = dict(data.get("element_sizes", {}))
+        else:
+            entries = data
+        for e in entries:
+            w.add(e["group_path"], e["pattern"], display=e.get("display"))
+        return w

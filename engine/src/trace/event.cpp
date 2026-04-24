@@ -462,9 +462,10 @@ void vp::Event::dump_highz_next()
     if (this->next_value_fill_callback)
     {
         uint64_t cycles = this->parent.clock.get_cycles() + 1;
-        uint64_t value = 0;
+        // Under the 4-state (value_bit, flag_bit) encoding, Z is
+        // (flag=1, value=1) per bit. Set both to all-1s.
         uint64_t highz = (uint64_t)-1;
-        this->next_value_fill_callback(this, (uint8_t *)&value, (uint8_t *)&highz);
+        this->next_value_fill_callback(this, (uint8_t *)&highz, (uint8_t *)&highz);
 
         if (!this->has_next_value || cycles < this->next_value_cyclestamp)
         {

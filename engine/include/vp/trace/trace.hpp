@@ -56,6 +56,10 @@ public:
         const char *description=nullptr);
     // To be removed
     inline void dump_value(uint8_t *value, int64_t time_delay=0);
+    // 4-state variant: `flags` is a per-bit mask parallel to `value`, same
+    // width. For each bit, (flag=0,val=0/1) means logical 0/1, (flag=1,val=0)
+    // means X, (flag=1,val=1) means Z.
+    inline void dump_value(uint8_t *value, uint8_t *flags, int64_t time_delay=0);
     inline void dump(uint8_t *value, int64_t time_delay=0);
     void dump_next(uint8_t *value, int64_t cycles=1, int64_t time_delay=0);
     inline void dump(const char *value, int64_t time_delay=0);
@@ -113,6 +117,7 @@ public:
         gv::Vcd_event_type type=gv::Vcd_event_type_logical,
         const char *description=nullptr) {}
     void dump_value(uint8_t *value, int64_t time_delay=0) {}
+    void dump_value(uint8_t *value, uint8_t *flags, int64_t time_delay=0) {}
     void dump(uint8_t *value, int64_t time_delay=0) {}
     void dump_next(uint8_t *value, int64_t cycles=1, int64_t time_delay=0) {}
     void dump(const char *value, int64_t time_delay=0) {}

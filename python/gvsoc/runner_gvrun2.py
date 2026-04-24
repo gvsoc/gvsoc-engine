@@ -60,7 +60,8 @@ def gen_config(args, config, cosim_mode):
 
     gvsoc_config.set('systemc', full_config.get('**/require_systemc') is not None)
     gvsoc_config.set('werror', args.werror)
-    gvsoc_config.set('events/use-external-dumper', args.gui and not cosim_mode)
+    gui_any = getattr(args, 'gui', None) or getattr(args, 'gui2', None) or getattr(args, 'gui3', None)
+    gvsoc_config.set('events/use-external-dumper', bool(gui_any) and not cosim_mode)
     gvsoc_config.set('wunconnected-padfun', args.w_unconnected_padfun)
     gvsoc_config.set('memcheck', args.memcheck)
     gvsoc_config.set('power', args.power)

@@ -48,6 +48,16 @@ namespace vp {
             this->event.dump_highz();
         }
 
+        // Mark the underlying event as active unconditionally, without having
+        // to match an events/include_regex. Intended for components (e.g. the
+        // vcd/fsdb dumpers) whose whole purpose is to expose their own signals
+        // to the trace engine; it relieves the user of having to pass
+        // '--event=.*' just so these signals reach the GUI / VCD dumper.
+        inline void enable()
+        {
+            this->event.enable_set(true);
+        }
+
     protected:
         virtual void reset(bool active) {};
 
@@ -69,6 +79,13 @@ namespace vp {
         Signal(Block &parent, std::string name, int width, bool do_reset=true, T reset=0);
         Signal(Block &parent, std::string name, int width, ResetKind reset_kind, T reset_value=0);
         inline void set(T value, int64_t cycle_delay=0, int64_t time_delay=0);
+        // 4-state variant: each flag bit paired with the corresponding value
+        // bit encodes 0/1/X/Z per bit:
+        //   (flag=0,val=0) -> 0, (flag=0,val=1) -> 1
+        //   (flag=1,val=0) -> X, (flag=1,val=1) -> Z
+        // Intended for dumpers / RTL-replay models that need to preserve
+        // original X/Z information.
+        inline void set(T value, T flags, int64_t cycle_delay=0, int64_t time_delay=0);
         inline void set_and_release(T value, int64_t cycle_delay=0, int64_t time_delay=0);
         inline T get() const;
 
@@ -123,7 +140,7 @@ namespace vp {
 template<class T>
 inline void vp::Signal<T>::set_and_release(T value, int64_t cycle_delay, int64_t time_delay)
 {
-    this->set(value, 0, time_delay);
+    this->set(value, (int64_t)0, time_delay);
     this->release_next();
 }
 
@@ -139,6 +156,22 @@ inline void vp::Signal<T>::set(T value, int64_t cycle_delay, int64_t time_delay)
 
     this->value = value;
     this->event.dump_value((uint8_t *)&this->value, time_delay);
+}
+
+template<class T>
+inline void vp::Signal<T>::set(T value, T flags, int64_t cycle_delay, int64_t time_delay)
+{
+#ifdef VP_TRACE_ACTIVE
+    if (this->trace.get_active())
+    {
+        this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "Setting signal (value: 0x%.*x, flags: 0x%.*x)\n",
+            this->nb_bytes*2, value, this->nb_bytes*2, flags);
+    }
+#endif
+
+    this->value = value;
+    this->event.dump_value((uint8_t *)&this->value, (uint8_t *)&flags, time_delay);
 }
 
 template<class T>

@@ -42,15 +42,26 @@ namespace vp {
             callback(this, value, time_delay, NULL);
         }
     }
+    inline void vp::Event::dump_value(uint8_t *value, uint8_t *flags, int64_t time_delay)
+    {
+        EventDumpCallback callback = (EventDumpCallback)this->dump_callback;
+
+        if (callback)
+        {
+            callback(this, value, time_delay, flags);
+        }
+    }
     inline void vp::Event::dump_highz(int64_t time_delay)
     {
         EventDumpCallback callback = (EventDumpCallback)this->dump_callback;
 
         if (callback)
         {
-            uint64_t value = 0;
+            // Under the 4-state (value_bit, flag_bit) encoding used by the
+            // GUI, Z is (flag=1, value=1) per bit. Set both to all-1s so the
+            // downstream painters render this as Z rather than X.
             uint64_t highz = (uint64_t)-1;
-            callback(this, (uint8_t *)&value, time_delay, (uint8_t *)&highz);
+            callback(this, (uint8_t *)&highz, time_delay, (uint8_t *)&highz);
         }
     }
 
@@ -77,10 +88,12 @@ namespace vp {
 
     if (callback && this->comp)
     {
-      uint64_t value = 0;
+      // 4-state encoding: Z is (flag=1, value=1) per bit. Keep this in sync
+      // with vp::Event::dump_highz / dump_highz_next so logic_box etc. pick
+      // the Z (yellow inactive-line) branch instead of X (red).
       uint64_t highz = (uint64_t)-1;
       callback(this->comp->traces.get_trace_engine(), this, comp->time.get_time() + time_delay,
-        comp->clock.get_engine() ? comp->clock.get_cycles() + cycle_delay : -1, (uint8_t *)&value,
+        comp->clock.get_engine() ? comp->clock.get_cycles() + cycle_delay : -1, (uint8_t *)&highz,
         (uint8_t *)&highz);
     }
   #endif
