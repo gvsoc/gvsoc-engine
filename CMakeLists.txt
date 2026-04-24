@@ -92,6 +92,7 @@ set(TARGET_CONFIG_DIR ${CMAKE_BINARY_DIR}/gvsoc/configs)
 file(MAKE_DIRECTORY ${TARGET_CONFIG_DIR})
 
 set(COMPONENTS)
+set(TREE_SOURCES)
 
 if(DEFINED GVSOC_TARGETS)
 
@@ -102,6 +103,7 @@ if(DEFINED GVSOC_TARGETS)
         string(REPLACE "/"  "." TARGET_NAME "${TARGET_NAME}")
         string(REPLACE ":"  "_" TARGET_NAME "${TARGET_NAME}")
         set(TARGET_CONFIG ${TARGET_CONFIG_DIR}/${TARGET_NAME}.config)
+        list(APPEND TREE_SOURCES ${TARGET_CONFIG_DIR}/${TARGET_NAME}.tree.cpp)
 
         message(STATUS "Generating GVSOC config to ${TARGET_CONFIG} with command: ")
 
@@ -222,7 +224,11 @@ endforeach()
 # =============================================
 # Each target generates a <target>.tree.cpp during gapy components.
 # Compile each into a shared library installed alongside the models.
-file(GLOB TREE_SOURCES "${TARGET_CONFIG_DIR}/*.tree.cpp")
+# TREE_SOURCES is built from the current GVSOC_TARGETS loop — do NOT
+# glob ${TARGET_CONFIG_DIR}/*.tree.cpp here: stale files from previous
+# builds (e.g. a prior test run) would be compiled against the current
+# target's regenerated headers and fail with "too many initializers"
+# when the Config layouts differ.
 foreach(tree_src ${TREE_SOURCES})
     get_filename_component(tree_name ${tree_src} NAME)       # e.g. "acu.acu.tree.cpp"
     string(REGEX REPLACE "\\.tree\\.cpp$" "" target_name "${tree_name}")  # e.g. "acu.acu"
