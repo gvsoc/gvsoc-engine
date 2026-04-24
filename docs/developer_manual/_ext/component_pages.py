@@ -540,19 +540,71 @@ def _render_page(entry: dict, roots: list[Path], repo_root: Path,
     return stem, '\n'.join(lines) + '\n'
 
 
-def _render_index(entries: list[tuple[str, str]]) -> str:
-    lines = [
+def _render_index(entries: list[dict]) -> list[tuple[str, str]]:
+    """Emit ``components/_generated/index.rst`` and the per-group stubs.
+
+    Entries are grouped by the first dotted segment of their module
+    path (so ``interco.router_v2`` lands in the ``interco`` group,
+    ``memory.memory_v3`` in ``memory``, etc.). Each group gets its
+    own stub page (``group_<name>.rst``) containing a toctree of its
+    member components; the top-level index toctrees into those stubs.
+
+    Going through stub pages (rather than captioned toctrees in a
+    single index) is what makes the RTD sidebar render a true
+    two-level hierarchy — captions at nested toctree depth don't
+    propagate to the sidebar, but per-group stub pages do.
+
+    Returns a list of ``(filename, content)`` tuples. The first entry
+    is always ``index.rst``; the rest are one per group.
+
+    A component whose module has no dot is an edge case not produced
+    by any of the existing generators; it would land in its own
+    group named after the bare module.
+    """
+    # Group entries by the first segment of ``entry['module']``.
+    groups: dict[str, list[dict]] = {}
+    for entry in entries:
+        module = entry.get('module', '')
+        group = module.split('.', 1)[0] if module else ''
+        groups.setdefault(group, []).append(entry)
+
+    outputs: list[tuple[str, str]] = []
+
+    # Top-level index: toctree into one stub per group. ``maxdepth: 2``
+    # so the RTD sidebar shows every group expanded one level down
+    # (i.e. with its members as sub-entries).
+    index_lines = [
         'Generated component pages',
         '=========================',
         '',
         '.. toctree::',
-        '   :maxdepth: 1',
+        '   :maxdepth: 2',
         '',
     ]
-    for stem, _title in entries:
-        lines.append(f'   {stem}')
-    lines.append('')
-    return '\n'.join(lines)
+    for group in sorted(groups):
+        index_lines.append(f'   group_{group}')
+    index_lines.append('')
+    outputs.append(('index.rst', '\n'.join(index_lines)))
+
+    # One stub per group. Its body is just a header and a toctree
+    # listing the group's component stems.
+    for group in sorted(groups):
+        members = sorted(groups[group], key=lambda e: e.get('title', ''))
+        header = group
+        lines = [
+            header,
+            '=' * max(len(header), 4),
+            '',
+            '.. toctree::',
+            '   :maxdepth: 1',
+            '',
+        ]
+        for entry in members:
+            lines.append(f'   {entry["stem"]}')
+        lines.append('')
+        outputs.append((f'group_{group}.rst', '\n'.join(lines)))
+
+    return outputs
 
 
 # --------------------------------------------------------------------------- #
@@ -673,10 +725,17 @@ def generate(doc_root: Path, repo_root: Path) -> None:
     registry = _discover_components(roots)
     coverage = _load_coverage()
 
-    rendered: list[tuple[str, str]] = []
+    rendered: list[dict] = []
     for entry in registry:
         stem, body = _render_page(entry, roots, repo_root, coverage)
         (out_dir / f'{stem}.rst').write_text(body)
-        rendered.append((stem, entry.get('title', stem)))
+        # Index rendering wants the stem (for the toctree) plus the
+        # module / title (for grouping + sort). Copy the entry and
+        # stash the stem back onto it.
+        rendered.append({**entry, 'stem': stem})
 
-    (out_dir / 'index.rst').write_text(_render_index(rendered))
+    # _render_index returns the top-level index.rst plus one
+    # ``group_<name>.rst`` per module root so the sidebar ends up
+    # two-level.
+    for filename, body in _render_index(rendered):
+        (out_dir / filename).write_text(body)
