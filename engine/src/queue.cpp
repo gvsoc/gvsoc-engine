@@ -152,6 +152,11 @@ void vp::Queue::push_front(QueueElem *elem)
     this->nb_elem++;
     elem->next = this->first;
     this->first = elem;
+    // push_front means "head, ready now": clamp the timestamp so empty() does
+    // not treat the inserted element as still delayed. Leaving the field
+    // uninitialised (or carrying a stale future timestamp from a previous use)
+    // would otherwise make empty() return true even with a non-empty queue.
+    elem->timestamp = this->clock.get_cycles();
 
     elem->cancel_callback = &vp::Queue::cancel_callback;
     elem->cancel_this = this;
