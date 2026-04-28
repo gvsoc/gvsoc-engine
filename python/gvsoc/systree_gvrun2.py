@@ -588,6 +588,17 @@ class Component(gvrun.target.SystemTreeNode):
             self.properties[f.name] = value
 
     def get_config(self):
+        """Return the typed config dataclass attached to this component.
+
+        Returns
+        -------
+        Config | None
+            The dataclass instance passed to the component at construction time, or
+            None if no config was provided.
+        """
+        return self.get_attributes()
+
+    def get_json_config(self):
         """Generates and return the system configuration.
 
         The whole hierarchy of components, bindings and properties are converted to a dictionnary
@@ -609,7 +620,7 @@ class Component(gvrun.target.SystemTreeNode):
         config = {}
 
         for component_name, component in self.components.items():
-            config[component_name] = component.get_config()
+            config[component_name] = component.get_json_config()
 
         config.update(self.properties)
 

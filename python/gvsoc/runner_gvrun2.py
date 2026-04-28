@@ -259,7 +259,7 @@ class Runner():
         [args, _] = parser.parse_known_args()
 
         self.full_config, self.gvsoc_config_path = gen_config(
-            args, { 'target': self.target.get_config() }, cosim_mode)
+            args, { 'target': self.target.get_json_config() }, cosim_mode)
 
         # Set the platform tree library path based on target name. Must mirror
         # the sanitisation done by CMake (gvsoc/engine/CMakeLists.txt) so the

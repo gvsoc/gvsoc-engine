@@ -665,6 +665,17 @@ class Component(RunnerComponent):
         return result
 
     def get_config(self):
+        """Return the typed config dataclass attached to this component.
+
+        Returns
+        -------
+        Config | None
+            The dataclass instance passed to the component at construction time, or
+            None if no config was provided.
+        """
+        return getattr(self, '_component_config', None)
+
+    def get_json_config(self):
         """Generates and return the system configuration.
 
         The whole hierarchy of components, bindings and properties are converted to a dictionnary
@@ -687,7 +698,7 @@ class Component(RunnerComponent):
             config = self.__merge_properties(config, js.import_config_from_file(json_config_file, find=True, interpret=True, gen=True).get_dict())
 
         for component_name, component in self.components.items():
-            component_config = { component_name: component.get_config() }
+            component_config = { component_name: component.get_json_config() }
             config = self.__merge_properties(config, component_config)
 
         #config = self.merge_options(config, self.comp_options, self.properties)

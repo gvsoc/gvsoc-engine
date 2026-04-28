@@ -276,7 +276,7 @@ if os.environ.get('USE_GVRUN') is None:
             os.makedirs(gapy_target.get_working_dir(), exist_ok=True)
 
             self.full_config, self.gvsoc_config_path = gen_config(
-                args, { 'target': self.target.get_config() }, gapy_target.get_working_dir(), self, cosim_mode)
+                args, { 'target': self.target.get_json_config() }, gapy_target.get_working_dir(), self, cosim_mode)
 
             if args.gdbserver:
                 self.full_config.set('**/gdbserver/enabled', True)
@@ -1168,7 +1168,7 @@ else:
                 [args, _] = parser.parse_known_args()
 
                 self.full_config, self.gvsoc_config_path = gen_config(
-                    args, { 'target': self.target.get_config() }, gapy_target.get_property('work_dir'), self, cosim_mode)
+                    args, { 'target': self.target.get_json_config() }, gapy_target.get_property('work_dir'), self, cosim_mode)
 
                 if args.gdbserver:
                     self.full_config.set('**/gdbserver/enabled', True)
