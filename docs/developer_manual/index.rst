@@ -18,7 +18,7 @@ It aims to help users:
    component_model.rst
    block.rst
    gvsoc_archi.rst
-   interfaces.rst
+   interfaces/index.rst
    models.rst
    tutorials.rst
    components/index.rst

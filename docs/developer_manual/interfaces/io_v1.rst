@@ -1,14 +1,23 @@
-Interfaces
-==========
+Memory-mapped IO request (legacy v1)
+====================================
 
-Memory-mapped IO request
-........................
+.. note::
+
+   This page documents the **legacy** v1 IO protocol
+   (``gvsoc/engine/engine/include/vp/itf/io.hpp``). New models should
+   use the v2 protocol described in :doc:`io_v2` instead. The v2
+   protocol drops the per-request ``grant()`` queue in favour of a
+   one-shot ``retry()`` handshake, replaces the request-argument stack
+   with model-side state, restricts each slave port to one master, and
+   adds an explicit burst protocol. The two protocols can coexist on
+   the same simulation (they use different ``IoSlave`` / ``IoMaster``
+   classes and different binding signatures).
 
 This interface can be used to exchange memory accesses with a given address and size.
 
 The protocol is shown on the following diagram.
 
-.. image:: images/io_request.png
+.. image:: ../images/io_request.png
 
 The initiator of the request calls the request method on the master port, which triggers the handler execution
 on the slave port.

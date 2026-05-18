@@ -91,6 +91,18 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 #
 html_theme = 'sphinx_rtd_theme'
 
+# Expose deeper levels in the RTD theme's left sidebar. The default
+# (navigation_depth=4) cuts off at the per-component page title in the
+# auto-generated components hierarchy (Components → Generated → group →
+# Component), hiding the page's own section headings (Architecture,
+# Front-ends, Middle-end, Back-ends, ...). -1 = unlimited; combined
+# with the group toctree's :maxdepth: 3 this lets the iDMA page's
+# in-page structure show up as collapsible entries under "iDMA (v2)".
+html_theme_options = {
+    'navigation_depth': -1,
+    'collapse_navigation': False,
+}
+
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".

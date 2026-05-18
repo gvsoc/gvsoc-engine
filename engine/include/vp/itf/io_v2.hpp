@@ -9,6 +9,47 @@
 #include "vp/queue.hpp"
 #include "vp/vp.hpp"
 
+// IO v2 protocol — burst conventions
+// ----------------------------------
+//
+// For a full walkthrough of the v2 protocol (object, ports, the three
+// request statuses, sync / async / DENIED-retry flows, burst protocol
+// with the three response forms, latency annotation, multiplexed
+// ports and v1->v2 migration), see the developer-manual page at
+// gvsoc/engine/docs/developer_manual/interfaces/io_v2.rst.
+//
+//
+// Any single IoReq submitted via IoMaster::req() may be answered by the slave in
+// one of three forms. All three are valid and must be tolerated by masters:
+//
+//   1. Sync big-packet:   slave returns IO_REQ_DONE inline with req->data filled
+//                         and req->status set. No later resp() fires.
+//   2. Async big-packet:  slave returns IO_REQ_GRANTED, later calls resp() once
+//                         with is_first = is_last = true and the full size.
+//   3. Beat stream:       slave returns IO_REQ_GRANTED, later calls resp() N
+//                         times reusing the same IoReq object, mutating data,
+//                         size, is_first and is_last between calls. Cumulative
+//                         response sizes equal request size. burst_id is
+//                         preserved across the beats. Final beat carries
+//                         is_last = true and the burst's final status.
+//
+// Reads vs writes (the AXI mental model):
+//
+//   - A read burst is always submitted as exactly one req() with
+//     size = total_burst_bytes, is_first = is_last = true. The response shape is
+//     the slave's choice (any of the three forms above).
+//   - A write burst may be submitted as either one req() carrying the full
+//     payload (big-packet write) or N req() calls each carrying one beat of
+//     data with is_first/is_last/burst_id set per beat (beat-form write). The
+//     slave responds per-req in either case.
+//
+// Beat-fidelity components (cycle-accurate routers, cycle-accurate iDMAs) can
+// route their outgoing IoMaster through a BeatResponseAdapter (see
+// gvsoc/core/models/utils/io_v2_beat_adapter.hpp) which normalises whatever
+// response form the slave produces into a uniform per-beat callback stream.
+// That lets the same beat-fidelity component interoperate with a fast
+// functional memory (sync DONE) as well as with a beat-aware DRAM controller.
+
 namespace vp {
 
 class IoSlave;
@@ -87,6 +128,10 @@ class IoReq : public vp::QueueElem {
     // For models that already use wall-clock scheduling (ClockEvent-based deferred
     // resp), leaving the field at 0 is fine — the delay is reflected in the real
     // cycle at which resp() fires.
+    //
+    // For beat-stream responses the slave can set this field per beat to give the
+    // master a per-beat earliest-ready offset (in addition to the natural pacing of
+    // when resp() actually fires).
     //
     // Masters reusing a request should call prepare() (or reset this field
     // explicitly) before each send.

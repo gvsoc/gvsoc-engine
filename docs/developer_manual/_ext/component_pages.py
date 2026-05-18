@@ -14,6 +14,14 @@ For each registered component we emit:
   - A ``Tests`` section built by ``ast``-walking every ``testset.cfg`` under
     each ``tests_dirs`` entry declared on ``__gvsoc_doc__``.
 
+A component that ships a hand-written page instead can set
+``__gvsoc_doc__['static_page']`` to a toctree-relative path (resolved from
+inside ``_generated/``) — the registry then skips auto-rendering and just
+adds the static page to the component's group toctree. This is how
+multi-class components that share a back-end pipeline (e.g. the v2 iDMA)
+get a single curated page that still appears in the generated component
+hierarchy.
+
 AST is used rather than ``import`` + introspection so a broken import in one
 generator does not take down the whole doc build.
 """
@@ -588,6 +596,12 @@ def _render_index(entries: list[dict]) -> list[tuple[str, str]]:
 
     # One stub per group. Its body is just a header and a toctree
     # listing the group's component stems.
+    #
+    # ``maxdepth: 3`` exposes the component page title (level 1), its
+    # top-level sections (level 2 — Architecture, Front-ends, Middle-end,
+    # Back-ends, ...) and one further nesting (level 3 — e.g.
+    # AXI/TCDM-specific subsections), so the RTD sidebar shows the
+    # component's structure instead of stopping at the page title.
     for group in sorted(groups):
         members = sorted(groups[group], key=lambda e: e.get('title', ''))
         header = group
@@ -596,7 +610,7 @@ def _render_index(entries: list[dict]) -> list[tuple[str, str]]:
             '=' * max(len(header), 4),
             '',
             '.. toctree::',
-            '   :maxdepth: 1',
+            '   :maxdepth: 3',
             '',
         ]
         for entry in members:
@@ -660,13 +674,36 @@ def _discover_components(roots: list[Path]) -> list[dict]:
 
     AST-only so a broken import in one generator doesn't kill the build —
     same policy used by :func:`_extract_tests`. The dotted module path is
-    derived from the file's location under the first root that contains
-    it; two roots shadowing the same relative path keep the first match.
+    derived from the file's location under the **deepest** root that
+    contains it: when one root nests under another (e.g. ``gvsoc/pulp``
+    and ``gvsoc/pulp/models/pulp`` are both module roots) a single .py
+    file would otherwise be discovered twice with two different module
+    paths and land in two different groups in the generated index. We
+    keep the deepest root only, which corresponds to the dotted path
+    Python actually resolves the module to at runtime.
     """
     seen: set[tuple[str, str]] = set()
     entries: list[dict] = []
+    roots_abs = [(r, r.resolve()) for r in roots]
     for root in roots:
+        root_abs = root.resolve()
         for py_path in sorted(root.rglob('*.py')):
+            py_abs = py_path.resolve()
+            # Skip if a deeper root also contains this file — that root
+            # will discover it under the shorter / canonical module path.
+            shadowed = False
+            for _, other_abs in roots_abs:
+                if other_abs == root_abs:
+                    continue
+                try:
+                    py_abs.relative_to(other_abs)
+                except ValueError:
+                    continue
+                if len(other_abs.parts) > len(root_abs.parts):
+                    shadowed = True
+                    break
+            if shadowed:
+                continue
             try:
                 tree = ast.parse(py_path.read_text())
             except (OSError, SyntaxError):
@@ -696,6 +733,15 @@ def _discover_components(roots: list[Path]) -> list[dict]:
                     'title':      doc.get('title') or f'{module}.{node.name}',
                     'tests_dirs': doc.get('tests_dirs') or [],
                 }
+                # Opt-out hook for components that prefer a hand-written page
+                # over the auto-generated autoclass + Ports + Tests layout.
+                # The value is a toctree reference written from inside
+                # _generated/ (so use a "../"-prefixed path to point at a
+                # static rst sitting elsewhere under components/). When set,
+                # we don't write a <stem>.rst file but still include the
+                # static_page in the component's group toctree.
+                if 'static_page' in doc:
+                    entry['static_page'] = doc['static_page']
                 if 'coverage_aggregate' in doc:
                     entry['coverage_aggregate'] = doc['coverage_aggregate']
                 entries.append(entry)
@@ -727,6 +773,12 @@ def generate(doc_root: Path, repo_root: Path) -> None:
 
     rendered: list[dict] = []
     for entry in registry:
+        if 'static_page' in entry:
+            # No auto-generated rst — the entry's group toctree will point
+            # at the supplied static_page (a path relative to the
+            # _generated/ directory, e.g. '../ips/pulp/idma_v2').
+            rendered.append({**entry, 'stem': entry['static_page']})
+            continue
         stem, body = _render_page(entry, roots, repo_root, coverage)
         (out_dir / f'{stem}.rst').write_text(body)
         # Index rendering wants the stem (for the toctree) plus the
