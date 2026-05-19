@@ -280,7 +280,15 @@ class Runner():
             models_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             tree_lib = os.path.join(models_dir, '..', 'lib', f'libplatform_tree_{lib_name}.so')
             tree_lib = os.path.normpath(tree_lib)
-            if os.path.exists(tree_lib) and self._platform_tree_matches_systree(tree_lib):
+            if not os.path.exists(tree_lib):
+                raise RuntimeError(
+                    f"Missing platform_tree library for target '{target_name}': "
+                    f"{tree_lib}\n"
+                    f"This usually means the build did not produce "
+                    f"libplatform_tree_{lib_name}.so. Re-run cmake/build for "
+                    f"this target, or verify GVSOC_TARGETS includes it."
+                )
+            if self._platform_tree_matches_systree(tree_lib):
                 gvsoc_config.set('platform_tree', tree_lib)
 
         if args.gdbserver:
