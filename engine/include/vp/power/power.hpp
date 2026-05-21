@@ -514,7 +514,7 @@ namespace vp
 
         vp::Block *top;  // Top component of the simulated architecture
 
-        FILE *file; // File where the power reports are dumped
+        FILE *file = NULL; // File where the power reports are dumped
 
         bool enabled; // True if power modeling is enabled
     };
