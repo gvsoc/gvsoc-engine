@@ -49,6 +49,22 @@
 // response form the slave produces into a uniform per-beat callback stream.
 // That lets the same beat-fidelity component interoperate with a fast
 // functional memory (sync DONE) as well as with a beat-aware DRAM controller.
+//
+// Strict-sync sub-protocol (IoV2Sync):
+//
+//   The above lists the general v2 contract. A slave port may *additionally*
+//   advertise the strict-sync sub-protocol on the Python side via
+//   :class:`gvsoc.signature.IoV2Sync`. That contract tightens the surface to
+//   "form 1 only, no latency annotation":
+//
+//     - Always returns IO_REQ_DONE from req_meth (never GRANTED / DENIED).
+//     - Never calls resp() / retry().
+//     - Never touches req->latency.
+//
+//   A master that also declares IoV2Sync on its output may rely on this and
+//   skip its async/retry/latency-honouring code paths. The C++ API surface is
+//   unchanged: the contract is enforced by Python signature checks plus
+//   model-author discipline. memory_v3 is the canonical IoV2Sync slave.
 
 namespace vp {
 

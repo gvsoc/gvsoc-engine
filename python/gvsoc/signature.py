@@ -23,11 +23,11 @@ compares master-side and slave-side signatures when bindings are flattened
 and, if they don't match, asks the master signature to produce a bridge
 component that is auto-inserted between the two ports.
 
-Today the only axis the framework checks is the protocol (big-packet io_v2
-vs beat-mode io_v2). The same mechanism is the natural extension point for
-clock-domain crossings, voltage-domain crossings, address-width adapters,
-etc. Subclasses add the checks; the binding machinery in systree_gvrun2.py
-does not need to grow.
+Today the framework distinguishes three io_v2 sub-protocols (big-packet,
+beat-mode, strict-sync) along the protocol axis. The same mechanism is the
+natural extension point for clock-domain crossings, voltage-domain
+crossings, address-width adapters, etc. Subclasses add the checks; the
+binding machinery in systree_gvrun2.py does not need to grow.
 """
 
 
@@ -68,9 +68,75 @@ class IoV2BigPacket(Signature):
     """io_v2 master/slave operating on whole-packet semantics.
 
     The slave may answer in any of the three v2 response forms; a big-packet
-    master tolerates all of them per the v2 protocol contract."""
+    master tolerates all of them per the v2 protocol contract.
+
+    A :class:`IoV2Sync` slave is a strict subset of this contract (only the
+    sync DONE response form, latency always 0), so a big-packet master can
+    bind to it directly without any adapter.
+    """
 
     tag = 'io_v2'
+
+    def is_compatible(self, other):
+        # IoV2Sync is a tighter version of the same response surface; a
+        # big-packet master is already prepared to handle the sync DONE
+        # response form, so this binds directly.
+        return isinstance(other, (IoV2BigPacket, IoV2Sync))
+
+
+class IoV2Sync(Signature):
+    """io_v2 port operating under the strict synchronous sub-protocol.
+
+    Slave contract:
+
+      - Always returns ``IO_REQ_DONE`` from ``req_meth`` (never ``GRANTED``,
+        never ``DENIED``).
+      - Never calls ``resp()`` or ``retry()`` — there is no async path.
+      - Never touches ``req->latency``. The master observes latency 0 on
+        return.
+      - May set ``req->status`` (``IO_RESP_OK`` / ``IO_RESP_INVALID``) on
+        the request before returning.
+
+    Master simplifications enabled by this contract:
+
+      - ``resp_meth`` / ``retry_meth`` are never invoked. Masters can pass
+        no-op stubs to the ``IoMaster`` constructor.
+      - No per-request bookkeeping for outstanding async responses.
+      - No event-scheduled wake-up to honour ``req->latency``: the master
+        consumes the response and proceeds inline.
+
+    Compatibility:
+
+      - Sync ↔ Sync: direct bind.
+      - BigPacket master ↔ Sync slave: direct bind (Sync is a subset).
+      - Beat master ↔ Sync slave: existing ``utils.io_v2_beat_adapter``
+        normalises the inline DONE into per-beat ``resp()`` calls.
+      - Sync master ↔ anything else: **RuntimeError** at build time. The
+        simpler master contract is unbreakable, and no adapter can
+        synthesise synchronous zero-latency semantics from an
+        async/latency-bearing slave without stalling the engine.
+    """
+
+    tag = 'io_v2'
+
+    def is_compatible(self, other):
+        return isinstance(other, IoV2Sync)
+
+    def bridge_to(self, other, parent, name):
+        if self.is_compatible(other):
+            return None
+        # A sync master cannot be safely connected to anything more
+        # general: an async slave's behaviour cannot be "made sync" without
+        # stalling the engine, and silently relaxing the contract would
+        # break the master's simplifying assumptions. This is a design
+        # error.
+        raise RuntimeError(
+            f"IoV2Sync master cannot bind to "
+            f"{type(other).__name__ if not isinstance(other, str) else repr(other)} "
+            f"slave: no adapter can synthesise synchronous zero-latency "
+            f"semantics from an async / latency-bearing slave. Either make "
+            f"the slave sync-capable, or declare the master as IoV2BigPacket."
+        )
 
 
 class IoV2Beat(Signature):
@@ -93,14 +159,15 @@ class IoV2Beat(Signature):
         # Same-mode peer (IoV2Beat <-> IoV2Beat, same beat_width): no adapter.
         if self.is_compatible(other):
             return None
-        # Mismatched mode (IoV2Beat master <-> IoV2BigPacket slave, or legacy
-        # ``'io_v2'`` string slave that is by default big-packet): adapter
-        # normalises the slave's response into a uniform per-beat stream.
-        # The legacy string is the historic v2 default and matches IoV2BigPacket
-        # semantically — the slave is free to answer in any of the three
-        # response forms, including the sync DONE that beat-fidelity masters
-        # cannot consume directly.
-        if isinstance(other, IoV2BigPacket) or other == IoV2BigPacket.tag:
+        # Mismatched mode (IoV2Beat master <-> IoV2BigPacket / IoV2Sync slave,
+        # or legacy ``'io_v2'`` string slave that is by default big-packet):
+        # the adapter normalises the slave's response into a uniform per-beat
+        # stream. The legacy string is the historic v2 default and matches
+        # IoV2BigPacket semantically — the slave is free to answer in any of
+        # the three response forms, including the sync DONE that beat-fidelity
+        # masters cannot consume directly. ``IoV2Sync`` is a strict subset
+        # of that surface (DONE only), so the same adapter handles it.
+        if isinstance(other, (IoV2BigPacket, IoV2Sync)) or other == IoV2BigPacket.tag:
             from utils.io_v2_beat_adapter import IoV2BeatAdapter
             return IoV2BeatAdapter(parent, name, beat_width=self.beat_width)
         # IoV2Beat <-> IoV2Beat with differing widths is a SoC design error,
