@@ -452,3 +452,72 @@ a set of methods for accessing the properties according to their type:
         this->size = config->get_child_int("size");
     }
 
+
+Adding models from external directories
+.......................................
+
+The build system discovers C++ models and Python generators by walking a list of
+*module roots*. The default roots (the engine, the in-tree models, PULP, gvrun,
+config_tree) are set by the top-level Makefile and passed to CMake as the
+``GVSOC_MODULES`` variable. External directories can be added to that list
+without modifying the SDK, which is the recommended way to keep
+project-specific models in their own repository.
+
+The Makefile exposes a ``MODULES`` variable for exactly this purpose. Its value
+is appended to ``GVSOC_MODULES`` at configure time:
+
+.. code-block:: bash
+
+    make build MODULES="/abs/path/to/my_models;/abs/path/to/other_models"
+
+Multiple roots are separated by ``;``. Paths should be absolute so that the
+build is reproducible regardless of the current working directory.
+
+Each root listed in ``GVSOC_MODULES`` is used for three things:
+
+- **CMake integration.** If the root contains a top-level ``CMakeLists.txt``,
+  it is pulled in via ``add_subdirectory()``. Any ``vp_model(...)``,
+  ``vp_block(...)`` or ``vp_files(...)`` declaration below it is built and
+  installed into ``install/models/`` and ``install/generators/`` like the
+  in-tree models.
+- **Include search path.** Every root is added as a private include directory
+  to every model target, so headers placed under those roots can be included
+  from any C++ model.
+- **Generator discovery.** Each root is passed to ``gvrun`` / ``gapy`` as a
+  ``--target-dir`` option, so Python generator modules below it become
+  importable when building or instantiating targets.
+
+A minimum external directory therefore looks like this:
+
+.. code-block:: text
+
+    /abs/path/to/my_models/
+    ├── CMakeLists.txt            # top-level, recurses into the model dirs
+    └── mycat/
+        └── my_model/
+            ├── CMakeLists.txt    # vp_model(...) + vp_files(...)
+            ├── my_model.cpp
+            └── my_model.py
+
+The top-level ``CMakeLists.txt`` just needs to recurse:
+
+.. code-block:: cmake
+
+    add_subdirectory(mycat/my_model)
+
+And the leaf one declares the model and installs the generator:
+
+.. code-block:: cmake
+
+    vp_model(NAME mycat.my_model SOURCES "my_model.cpp")
+    vp_files(FILES my_model.py PREFIX "mycat/my_model")
+
+At simulation time there is no separate environment variable to set: everything
+is resolved during build, so the only requirement is that the ``.so`` and the
+generator ``.py`` files end up under ``install/models/`` and
+``install/generators/``. The Python generator can then be referenced from a
+target like any in-tree one, e.g. ``import mycat.my_model``.
+
+This is the same mechanism used by the tutorials, which pass ``MODULES=$(CURDIR)``
+to the SDK Makefile so that the tutorial directory itself is treated as an
+external module root.
