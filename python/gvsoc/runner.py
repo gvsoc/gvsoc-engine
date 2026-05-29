@@ -578,7 +578,12 @@ if os.environ.get('USE_GVRUN') is None:
 
                         if args.gui3:
 
-                            command = stub + ['gvsoc-gui3',
+                            # SystemC-backed targets need the SystemC-linked GUI build.
+                            gui3_bin = 'gvsoc-gui3-sc' \
+                                if self.full_config.get('**/require_systemc') is not None \
+                                else 'gvsoc-gui3'
+
+                            command = stub + [gui3_bin,
                                 '-v ' + self.gvsoc_config_path,
                                 '-g gvsoc_gui_config.json',
                             ]
