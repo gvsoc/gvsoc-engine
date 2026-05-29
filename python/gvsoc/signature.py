@@ -71,8 +71,8 @@ class IoV2BigPacket(Signature):
     master tolerates all of them per the v2 protocol contract.
 
     A :class:`IoV2Sync` slave is a strict subset of this contract (only the
-    sync DONE response form, latency always 0), so a big-packet master can
-    bind to it directly without any adapter.
+    sync DONE response form), so a big-packet master can bind to it directly
+    without any adapter.
     """
 
     tag = 'io_v2'
@@ -85,36 +85,43 @@ class IoV2BigPacket(Signature):
 
 
 class IoV2Sync(Signature):
-    """io_v2 port operating under the strict synchronous sub-protocol.
+    """io_v2 port operating under the synchronous sub-protocol.
+
+    This is the big-packet response surface restricted to the *inline*
+    form: the slave answers within the same ``req()`` call. It does not
+    forbid latency — the slave may annotate ``req->latency`` and the master
+    honours it inline (it stalls its own cycle counter by that amount after
+    ``req()`` returns). What it forbids is the *asynchronous* machinery.
 
     Slave contract:
 
       - Always returns ``IO_REQ_DONE`` from ``req_meth`` (never ``GRANTED``,
         never ``DENIED``).
       - Never calls ``resp()`` or ``retry()`` — there is no async path.
-      - Never touches ``req->latency``. The master observes latency 0 on
-        return.
-      - May set ``req->status`` (``IO_RESP_OK`` / ``IO_RESP_INVALID``) on
-        the request before returning.
+      - May annotate ``req->latency`` synchronously (read by the master on
+        return) and may set ``req->status`` (``IO_RESP_OK`` /
+        ``IO_RESP_INVALID``).
 
     Master simplifications enabled by this contract:
 
       - ``resp_meth`` / ``retry_meth`` are never invoked. Masters can pass
         no-op stubs to the ``IoMaster`` constructor.
       - No per-request bookkeeping for outstanding async responses.
-      - No event-scheduled wake-up to honour ``req->latency``: the master
-        consumes the response and proceeds inline.
+      - No event-scheduled wake-up: the master reads ``req->latency`` inline
+        and proceeds, rather than waiting for a deferred ``resp()``.
 
     Compatibility:
 
       - Sync ↔ Sync: direct bind.
       - BigPacket master ↔ Sync slave: direct bind (Sync is a subset).
       - Beat master ↔ Sync slave: existing ``utils.io_v2_beat_adapter``
-        normalises the inline DONE into per-beat ``resp()`` calls.
+        normalises the inline DONE (with its latency annotation) into a
+        per-beat ``resp()`` stream.
       - Sync master ↔ anything else: **RuntimeError** at build time. The
         simpler master contract is unbreakable, and no adapter can
-        synthesise synchronous zero-latency semantics from an
-        async/latency-bearing slave without stalling the engine.
+        synthesise an inline response out of an async (``GRANTED`` +
+        deferred ``resp()`` / ``DENIED`` + ``retry()``) slave without
+        stalling the engine.
     """
 
     tag = 'io_v2'
@@ -126,16 +133,16 @@ class IoV2Sync(Signature):
         if self.is_compatible(other):
             return None
         # A sync master cannot be safely connected to anything more
-        # general: an async slave's behaviour cannot be "made sync" without
-        # stalling the engine, and silently relaxing the contract would
-        # break the master's simplifying assumptions. This is a design
-        # error.
+        # general: an async slave's behaviour cannot be folded into an
+        # inline response without stalling the engine, and silently
+        # relaxing the contract would break the master's simplifying
+        # assumptions. This is a design error.
         raise RuntimeError(
             f"IoV2Sync master cannot bind to "
             f"{type(other).__name__ if not isinstance(other, str) else repr(other)} "
-            f"slave: no adapter can synthesise synchronous zero-latency "
-            f"semantics from an async / latency-bearing slave. Either make "
-            f"the slave sync-capable, or declare the master as IoV2BigPacket."
+            f"slave: no adapter can synthesise an inline synchronous "
+            f"response from an async slave. Either make the slave "
+            f"sync-capable, or declare the master as IoV2BigPacket."
         )
 
 
