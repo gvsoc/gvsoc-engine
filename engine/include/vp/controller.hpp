@@ -167,6 +167,10 @@ namespace gv {
         gv::Gvsoc_user *user;
         // Tell if main controller is asynchronous
         bool is_async;
+        // True when the configuration contains SystemC components. In this case the engine
+        // is not driven by the internal engine thread but by an external SystemC kernel
+        // (e.g. the GUI process), so the auto engine thread is not started.
+        bool systemc_enabled = false;
         // Thread running the engine in asynchronous mode
         std::thread *engine_thread;
         // Thread handling ctrlC

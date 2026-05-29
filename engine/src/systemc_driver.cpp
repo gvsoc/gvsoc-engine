@@ -20,22 +20,32 @@
  */
 
 #include <gv/gvsoc.hpp>
+#include <vp/controller.hpp>
 #include <algorithm>
 #include <dlfcn.h>
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <thread>
 #include <vp/json.hpp>
 #include <systemc.h>
-#include "main_systemc.hpp"
+#include "systemc_driver.hpp"
 
-static gv::Gvsoc *sc_gvsoc;
-
+// SystemC module driving the in-process GVSOC time engine.
+//
+// The kernel is the master clock: on each iteration it advances the GVSOC engine up to
+// the current SystemC time (step_until_sync), then sleeps in SystemC until the next GVSOC
+// event (or until a SystemC peripheral updates a GVSOC input, which fires sync_event via
+// was_updated). The whole loop runs on the thread which owns the engine mutex, so it
+// reuses the controller's synchronous stepping primitives directly. Play/pause is handled
+// transparently by wait_runnable(), which blocks while any client (e.g. the GUI) has
+// stopped the engine.
 class my_module : public sc_module, public gv::Gvsoc_user
 {
 public:
     SC_HAS_PROCESS(my_module);
-    my_module(sc_module_name nm, gv::Gvsoc *gvsoc) : sc_module(nm), gvsoc(gvsoc)
+    my_module(sc_module_name nm, gv::Controller *controller, gv::ControllerClient *client)
+        : sc_module(nm), controller(controller), client(client)
     {
         SC_THREAD(run);
     }
@@ -45,13 +55,11 @@ public:
         while(1)
         {
             int64_t time = (int64_t)sc_time_stamp().to_double();
-            gvsoc->step_until(time);
-            int64_t next_timestamp = gvsoc->get_next_event_time();
+            this->controller->step_until_sync(time, this->client);
+            int64_t next_timestamp = this->client->get_next_event_time();
 
             if (this->is_sim_finished)
             {
-                gvsoc->quit(0);
-                int status = gvsoc->join();
                 sc_stop();
                 break;
             }
@@ -62,7 +70,7 @@ public:
             // update the time.
             // If so, just call again the step function so that we release the engine for
             // a while.
-            gvsoc->wait_runnable();
+            this->controller->wait_runnable();
 
             if (next_timestamp == -1)
             {
@@ -87,7 +95,8 @@ public:
         sync_event.notify();
     }
 
-    gv::Gvsoc *gvsoc;
+    gv::Controller *controller;
+    gv::ControllerClient *client;
     sc_event sync_event;
     bool is_sim_finished = false;
 };
@@ -95,7 +104,7 @@ public:
 int sc_main(int argc, char *argv[])
 {
     sc_start();
-    return sc_gvsoc->join();
+    return 0;
 }
 
 int requires_systemc(const char *config_path)
@@ -115,14 +124,40 @@ int requires_systemc(const char *config_path)
     return 0;
 }
 
+int systemc_run(gv::Controller *controller, gv::ControllerClient *client)
+{
+    my_module module("Gvsoc_SystemC_wrapper", controller, client);
+    // Become the engine's user so we receive was_updated (to resynchronize the SystemC
+    // wait) and has_ended (to stop the kernel). In the GUI this overrides the database's
+    // no-op user binding, which is harmless since the database is fed through vcd_bind.
+    client->bind(&module);
+    return sc_core::sc_elab_and_sim(0, NULL);
+}
+
 int systemc_launcher(const char *config_path)
 {
     gv::GvsocConf conf = { .config_path=config_path, .api_mode=gv::Api_mode::Api_mode_sync };
     gv::Gvsoc *gvsoc = gv::gvsoc_new(&conf);
     gvsoc->open();
     gvsoc->start();
-    sc_gvsoc = gvsoc;
-    my_module module("Gvsoc SystemC wrapper", gvsoc);
-    gvsoc->bind(&module);
-    return sc_core::sc_elab_and_sim(0, NULL);
+    // Synchronous mode: start() already holds the engine mutex on this thread, so we can
+    // drive the SystemC kernel directly.
+    systemc_run(&gv::Controller::get(), (gv::ControllerClient *)gvsoc);
+    gvsoc->quit(0);
+    return gvsoc->join();
+}
+
+void systemc_gui_start()
+{
+    // The GUI engine runs asynchronously: spawn a dedicated thread which becomes the
+    // SystemC kernel and drives the in-process engine. It takes the engine mutex (like the
+    // normal engine_routine would) so that the controller's stepping/locking protocol is
+    // respected, and the GUI/SDL thread keeps driving play/pause through the client.
+    new std::thread([]()
+    {
+        gv::Controller &controller = gv::Controller::get();
+        controller.lock();
+        systemc_run(&controller, controller.default_client_get());
+        controller.unlock();
+    });
 }

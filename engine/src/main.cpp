@@ -26,7 +26,7 @@
 #include <unistd.h>
 #include <vp/json.hpp>
 #ifdef VP_USE_SYSTEMC
-#include "main_systemc.hpp"
+#include "systemc_driver.hpp"
 #endif
 
 

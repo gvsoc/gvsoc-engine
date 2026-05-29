@@ -125,6 +125,12 @@ void gv::Controller::init(gv::GvsocConf *conf)
 
             js::Config *gv_config = this->handler->gv_config;
 
+            // When the platform contains SystemC components, the time engine must be driven
+            // by the SystemC kernel rather than by the internal engine thread. The external
+            // driver (the gvsoc_launcher in synchronous mode, or the GUI process via
+            // systemc_gui_start) takes over running the engine.
+            this->systemc_enabled = gv_config->get_child_bool("systemc");
+
             this->proxy = NULL;
             if (gv_config->get_child_bool("proxy/enabled"))
             {
@@ -160,11 +166,16 @@ void gv::Controller::open(ControllerClient *client)
 
         signal(SIGINT, sigint_handler);
 
-        // In asynchronous mode, a dedicated thread is running the time engine.
-        this->engine_thread = new std::thread(&gv::Controller::engine_routine, this);
+        // In asynchronous mode, a dedicated thread is running the time engine, unless the
+        // platform uses SystemC: in that case the engine is driven by an external SystemC
+        // kernel (e.g. the GUI process), which becomes the engine thread itself.
+        if (!this->systemc_enabled)
+        {
+            this->engine_thread = new std::thread(&gv::Controller::engine_routine, this);
 #ifndef __APPLE__
-        pthread_setname_np(this->engine_thread->native_handle(), "engine");
+            pthread_setname_np(this->engine_thread->native_handle(), "engine");
 #endif
+        }
     }
     else
     {
