@@ -502,6 +502,7 @@ class Runner():
                     file.write(f'CONFIG_{comp.name}=1\n')
                     file.write(f'CONFIG_SRCS_{comp.name}={" ".join(sources)}\n')
                     file.write(f'CONFIG_CFLAGS_{comp.name}={" ".join(comp.cflags)}\n')
+                    file.write(f'CONFIG_LIBS_{comp.name}={" ".join(comp.libs)}\n')
 
 
             return True

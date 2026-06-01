@@ -217,6 +217,13 @@ foreach(component ${COMPONENTS})
     vp_model(NAME ${component}
         SOURCES "${SRCS_LIST}"
     )
+    # Link any libraries declared from the generator via Component.add_libraries().
+    if(NOT "${CONFIG_LIBS_${component}}" STREQUAL "")
+        string(REPLACE " " ";" LIBS_LIST "${CONFIG_LIBS_${component}}")
+        vp_model_link_libraries(NAME ${component}
+            LIBRARY "${LIBS_LIST}"
+        )
+    endif()
 endforeach()
 
 # =============================================

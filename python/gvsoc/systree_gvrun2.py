@@ -58,9 +58,10 @@ def _signatures_match(master_sig, slave_sig):
 
 class GeneratedComponent(object):
 
-    def __init__(self, name, comp_name, sources, cflags):
+    def __init__(self, name, comp_name, sources, cflags, libs):
         self.sources = sources
         self.cflags = cflags
+        self.libs = libs
         self.config_name = name
         self.name = f'gen_{comp_name}'
         self.comp_name = comp_name
@@ -69,11 +70,11 @@ class GeneratedComponent(object):
 
 
 # This takes care of computing if a new module has to be compiled for the specified set
-# of sources and cflags, so that we can reuse one module for several instances
+# of sources, cflags and libs, so that we can reuse one module for several instances
 # This is only for components which are fully handled from Python without cmake
-def get_generated_component(sources, cflags):
-    # Compute full name what sources and cflags
-    name = ''.join(sources + cflags)
+def get_generated_component(sources, cflags, libs):
+    # Compute full name from sources, cflags and libs
+    name = ''.join(sources + cflags + libs)
     # Compute a unique hash so that we don't compile with long name
     name_hash = int(hashlib.md5(name.encode('utf-8')).hexdigest()[0:7], 16)
 
@@ -94,7 +95,7 @@ def get_generated_component(sources, cflags):
 
     # If the component is not yet registered do it
     if generated_components.get(comp_name) is None:
-        generated_components[comp_name] = GeneratedComponent(name=name, comp_name=comp_name, sources=sources, cflags=cflags)
+        generated_components[comp_name] = GeneratedComponent(name=name, comp_name=comp_name, sources=sources, cflags=cflags, libs=libs)
 
     return generated_components[comp_name]
 
@@ -208,6 +209,7 @@ class Component(gvrun.target.SystemTreeNode):
         self.interfaces = []
         self.c_flags = []
         self.sources = []
+        self.libs = []
         self.vcd_traces = []
         self.gui_callbacks = []
 
@@ -401,6 +403,25 @@ class Component(gvrun.target.SystemTreeNode):
             List of C flags to be added.
         """
         self.c_flags += flags
+
+    def add_libraries(self, libs: list):
+        """Add link libraries.
+
+        The specified libraries are linked into the shared library compiled from this
+        component's sources. Each entry is passed to the linker, so it can be a library
+        name (e.g. ``m`` to link ``libm``), a full path to a ``.so``/``.a``, or a linker
+        flag (e.g. ``-lfoo`` or ``-L/path``).\n
+        This only applies to components fully handled from Python (i.e. with sources added
+        through add_sources, without a CMakeLists).\n
+        Note that if the same component is instantiated several times with different
+        libraries, it will be compiled once for each set of libraries.\n
+
+        Parameters
+        ----------
+        libs : list
+            List of libraries to be linked.
+        """
+        self.libs += libs
 
     def itf_bind(self, master_itf_name: str, slave_itf: SlaveItf, signature=None,
             composite_bind: bool=False):
@@ -817,7 +838,7 @@ class Component(gvrun.target.SystemTreeNode):
         self.build_done = True
 
         if self.component is None and len(self.sources) != 0:
-            self.generated_component = get_generated_component(self.sources, self.c_flags)
+            self.generated_component = get_generated_component(self.sources, self.c_flags, self.libs)
             self.add_property('vp_component', self.generated_component.name)
 
     def __expand_signature_bridges(self):
