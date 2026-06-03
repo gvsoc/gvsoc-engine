@@ -67,6 +67,11 @@ public:
     void dump_highz_next();
     std::string path_get();
     void enable_set(bool enabled, vp::Event_file *file=NULL);
+    // Declare this event to the given Vcd_user (no enablement / streaming
+    // wiring). Invoked once per Vcd_user from TraceEngine::start() so the
+    // Vcd_user sees every declared signal independently of the
+    // regex / include_raw enable filter.
+    void declare_to(gv::Vcd_user *user);
     inline bool active_get() { return this->dump_callback != NULL; }
     bool dump_next_values();
     void next_set(vp::Event *next) { this->next = next; }
@@ -75,6 +80,12 @@ public:
     gv::Vcd_event_type type;
     int width;
     const char *description;
+    // Number of live subscribers via gv::Vcd::event_subscribe(). The engine
+    // owns this counter: ++ on each subscribe match, -- on each unsubscribe
+    // match. The 0->1 transition triggers enable_set(true); the 1->0
+    // transition triggers enable_set(false). Default 0 means events are
+    // suppressed (dump_callback stays NULL) and produce no DB / file output.
+    int subscriber_count = 0;
 private:
     static void dump_string(vp::Event *event, uint8_t *value, int64_t time_delay, uint8_t *flags);
     static void dump_1(vp::Event *event, uint8_t *value, int64_t time_delay, uint8_t *flags);
@@ -125,10 +136,12 @@ public:
     void dump_highz_next() {}
     std::string path_get() {return "";}
     void enable_set(bool enabled, vp::Event_file *file=NULL) {}
+    void declare_to(gv::Vcd_user *user) {}
     inline bool active_get() { return false; }
 
     gv::Vcd_event_type type=gv::Vcd_event_type_logical;
     int width=0;
+    int subscriber_count = 0;
 };
 #endif
 
@@ -197,6 +210,9 @@ class Trace {
     FILE *trace_file = stdout;
     int is_event;
     gv::Vcd_event_type type;
+    // Same role as vp::Event::subscriber_count — refcount of live
+    // gv::Vcd::event_subscribe() callers matching this legacy trace's path.
+    int subscriber_count = 0;
 
   protected:
     int level;

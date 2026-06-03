@@ -375,6 +375,18 @@ std::string vp::Event::path_get()
     return this->parent.get_path() + "/" + std::string(this->name);
 }
 
+void vp::Event::declare_to(gv::Vcd_user *user)
+{
+    if (user == NULL) return;
+    std::string clock_trace_name = "";
+    if (this->parent.clock.get_engine())
+    {
+        clock_trace_name = this->parent.clock.get_engine()->clock_trace.get_full_path();
+    }
+    user->event_declare(this->path_get(), this->type, this->width,
+        this->description ? this->description : "", clock_trace_name);
+}
+
 void vp::Event::enable_set(bool enabled, vp::Event_file *file)
 {
     if (enabled)

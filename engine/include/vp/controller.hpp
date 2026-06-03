@@ -125,8 +125,10 @@ namespace gv {
         void vcd_bind(gv::Vcd_user *user, ControllerClient *client);
         void vcd_enable(ControllerClient *client);
         void vcd_disable(ControllerClient *client);
-        void event_add(std::string path, bool is_regex, ControllerClient *client);
-        void event_exclude(std::string path, bool is_regex, ControllerClient *client);
+        int event_subscribe(std::string pattern,
+            gv::Vcd::MatchKind kind, ControllerClient *client);
+        int event_unsubscribe(std::string pattern,
+            gv::Vcd::MatchKind kind, ControllerClient *client);
         void *get_component(std::string path, ControllerClient *client);
 
         vp::Top *top_get() { return this->handler; }
@@ -234,8 +236,10 @@ namespace gv {
         void vcd_bind(gv::Vcd_user *user) override;
         void vcd_enable() override;
         void vcd_disable() override;
-        void event_add(std::string path, bool is_regex) override;
-        void event_exclude(std::string path, bool is_regex) override;
+        int event_subscribe(std::string pattern,
+            gv::Vcd::MatchKind kind = gv::Vcd::MatchKind::Exact) override;
+        int event_unsubscribe(std::string pattern,
+            gv::Vcd::MatchKind kind = gv::Vcd::MatchKind::Exact) override;
         void *get_component(std::string path) override;
         void wait_runnable() override;
         void terminate() override;

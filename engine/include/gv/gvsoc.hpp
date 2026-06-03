@@ -244,19 +244,30 @@ namespace gv {
     {
     public:
         /**
-         * Called by GVSOC to register a new VCD event.
+         * Called by GVSOC at simulation startup to declare every VCD event in
+         * the platform.
          *
-         * This call is used by GVSOC to identify each VCD event by an integer and to give details
-         * about the associated signal.
-         * No GVSOC API can be called from this callback.
+         * Invoked once per declared signal, for every Vcd_user bound at
+         * vcd_bind() time, before simulation runs. The default implementation
+         * is a no-op so legacy Vcd_user subclasses (which only override
+         * event_register) keep working unchanged — they still receive only
+         * events the engine's regex / include_raw filter matched.
          *
-         * @param path The path of the VCD event in the simulated system.
-         * @param type The type of the VCD event.
-         * @param width The width of the VCD event.
-         * @param description A description of the VCD event.
-         * @param clock_path If any, path of the clock trace.
+         * Override this to capture the full declared signal set independent
+         * of whether the engine matched a regex — e.g. populate the GUI's
+         * signal browser. The subclass can then call
+         * gv::Gvsoc::event_subscribe() to ask the engine to stream events
+         * for any subset of those signals it cares about.
          *
-         * @return The trace identifier, to be used to refer to this trace when an event is pushed.
+         * No GVSOC API may be called from inside this callback.
+         */
+        virtual void *event_declare(std::string path, Vcd_event_type type, int width,
+            std::string description, std::string clock_path="") { return NULL; }
+
+        /**
+         * Called by GVSOC when an event is actually enabled for streaming
+         * (regex match, explicit include_raw, or event_subscribe()).
+         * Returns the handle threaded back into event_update_*() calls.
          */
         virtual void *event_register(std::string path, Vcd_event_type type, int width,
             std::string description, std::string clock_path="") { return NULL; }
@@ -369,24 +380,37 @@ namespace gv {
         virtual void vcd_disable() {}
 
         /**
-         * Enable VCD events
-         *
-         * This will add the specified list of events to the included ones.
-         *
-         * @param path The path of the VCD events to enable.
-         * @param is_regex True if the specified path is a regular expression.
+         * Match kind for event_subscribe()/event_unsubscribe().
          */
-        virtual void event_add(std::string path, bool is_regex=false) {}
+        enum class MatchKind { Exact = 0, Prefix, Regex };
 
         /**
-         * Disable VCD events
+         * Subscribe to a set of declared events.
          *
-         * This will add the specified list of events to the excluded ones.
+         * Walks the engine's declared-event list at call time, matches every
+         * entry against `pattern` according to `kind`, and bumps the per-event
+         * subscriber count. On the 0->1 edge the dump pipeline is activated
+         * and the bound Vcd_user starts receiving event_update_*() callbacks
+         * for the matched events.
          *
-         * @param path The path of the VCD events to disable.
-         * @param is_regex True if the specified path is a regular expression.
+         * There is no standing state — late-declared events are not
+         * retroactively matched. In practice all events declare during the
+         * one-shot TraceEngine::start() loop, so any subscribe issued after
+         * vcd_bind() + start() sees them all.
+         *
+         * @param pattern The path / prefix / regex to match.
+         * @param kind  Match policy. Default Exact = full-path match.
+         * @return Number of events newly subscribed (refcount transitions counted).
          */
-        virtual void event_exclude(std::string path, bool is_regex=false) {}
+        virtual int event_subscribe(std::string pattern,
+            MatchKind kind = MatchKind::Exact) { return 0; }
+
+        /**
+         * Symmetric teardown — unsubscribe events matching pattern under the
+         * given kind. Returns the number of subscriptions removed.
+         */
+        virtual int event_unsubscribe(std::string pattern,
+            MatchKind kind = MatchKind::Exact) { return 0; }
     };
 
 

@@ -102,11 +102,178 @@ void vp::TraceEngine::check_event_active(vp::Event *event)
     if (this->event_active_get(path, file_path))
 	{
 	    event->enable_set(true, this->get_event_file(file_path));
+        // Pin the event as a synthetic permanent subscriber so the GUI's
+        // event_unsubscribe (and the matching enable_set(false)) doesn't tear
+        // down a stream the --event=/include_raw filter wants to keep alive.
+        event->subscriber_count++;
 	}
 	else
 	{
 	    event->enable_set(false);
 	}
+}
+
+// Enable / disable matching events for the bound Vcd_user. The engine
+// currently supports a single Vcd_user at a time, so the `user` argument
+// must match `this->vcd_user`; future multi-user work will lift that
+// constraint.
+//
+// Returns the number of events whose enable state transitioned.
+static bool path_matches(const std::string &path, const std::string &pattern,
+    gv::Vcd::MatchKind kind, regex_t *compiled_regex)
+{
+    switch (kind)
+    {
+        case gv::Vcd::MatchKind::Exact:
+            return path == pattern;
+        case gv::Vcd::MatchKind::Prefix:
+            return path.compare(0, pattern.size(), pattern) == 0;
+        case gv::Vcd::MatchKind::Regex:
+            return compiled_regex && regexec(compiled_regex, path.c_str(),
+                0, NULL, 0) == 0;
+    }
+    return false;
+}
+
+int vp::TraceEngine::event_subscribe(std::string pattern, gv::Vcd::MatchKind kind)
+{
+    // No Vcd_user bound (--vcd-only mode, proxy dynamic subscribe) routes
+    // through the file dumper. Default sink is all.vcd, same as the legacy
+    // conf_trace() path. With a Vcd_user bound (GUI mode), file is NULL and
+    // events flow exclusively through the Vcd_user pipeline.
+    vp::Event_file *file_dst = (this->vcd_user == NULL)
+        ? this->get_event_file("all.vcd")
+        : NULL;
+
+    regex_t compiled_regex;
+    bool have_regex = false;
+    if (kind == gv::Vcd::MatchKind::Regex)
+    {
+        if (regcomp(&compiled_regex, pattern.c_str(), REG_EXTENDED | REG_NOSUB) != 0)
+        {
+            return 0;
+        }
+        have_regex = true;
+    }
+
+    int count = 0;
+    for (size_t i = 0; i < this->events_array.size(); i++)
+    {
+        vp::Trace *trace = this->events_array[i];
+        if (!trace) continue;
+
+        if (this->is_event[i])
+        {
+            // vp::Event entry (used by vp::Signal). Path getter is path_get();
+            // activation flips enable_set(true) on the 0->1 refcount edge.
+            vp::Event *event = (vp::Event *)trace;
+            if (path_matches(event->path_get(), pattern, kind,
+                have_regex ? &compiled_regex : NULL))
+            {
+                if (event->subscriber_count++ == 0)
+                {
+                    event->enable_set(true, file_dst);
+                }
+                count++;
+            }
+        }
+        else
+        {
+            // Legacy vp::Trace entry (vp::Register::reg_event, new_trace_event,
+            // event_imiss, pcer_*, …). Path getter is get_full_path();
+            // activation flips set_event_active(true) which wires
+            // dump_callback so subsequent vp::Trace::event() / event_real() /
+            // event_string() calls push values into the trace pipe. With a
+            // Vcd_user bound we also invoke event_register on the 0->1 edge
+            // so the GUI's TraceCapturer allocates a DbTrace for the id.
+            if (path_matches(trace->get_full_path(), pattern, kind,
+                have_regex ? &compiled_regex : NULL))
+            {
+                if (trace->subscriber_count++ == 0)
+                {
+                    if (trace->comp && trace->comp->clock.get_engine() &&
+                        trace->clock_trace == NULL)
+                    {
+                        trace->clock_trace = &trace->comp->clock.get_engine()->clock_trace;
+                    }
+                    std::string clock_trace_name = trace->clock_trace ?
+                        trace->clock_trace->path : "";
+                    int width = trace->type == gv::Vcd_event_type_real ? 8 :
+                                trace->type == gv::Vcd_event_type_string ? 0 :
+                                trace->width;
+                    if (this->vcd_user && trace->user_trace == NULL)
+                    {
+                        trace->user_trace = this->vcd_user->event_register(
+                            trace->get_full_path(), trace->type, width, "",
+                            clock_trace_name);
+                    }
+                    trace->set_event_active(true, file_dst);
+                }
+                count++;
+            }
+        }
+    }
+
+    if (have_regex) regfree(&compiled_regex);
+    return count;
+}
+
+int vp::TraceEngine::event_unsubscribe(std::string pattern, gv::Vcd::MatchKind kind)
+{
+    regex_t compiled_regex;
+    bool have_regex = false;
+    if (kind == gv::Vcd::MatchKind::Regex)
+    {
+        if (regcomp(&compiled_regex, pattern.c_str(), REG_EXTENDED | REG_NOSUB) != 0)
+        {
+            return 0;
+        }
+        have_regex = true;
+    }
+
+    int count = 0;
+    for (size_t i = 0; i < this->events_array.size(); i++)
+    {
+        vp::Trace *trace = this->events_array[i];
+        if (!trace) continue;
+
+        if (this->is_event[i])
+        {
+            vp::Event *event = (vp::Event *)trace;
+            if (path_matches(event->path_get(), pattern, kind,
+                have_regex ? &compiled_regex : NULL))
+            {
+                // Mismatched unsubscribe (count already 0) is silently
+                // ignored — keeps the counter sane.
+                if (event->subscriber_count > 0)
+                {
+                    if (--event->subscriber_count == 0)
+                    {
+                        event->enable_set(false);
+                    }
+                    count++;
+                }
+            }
+        }
+        else
+        {
+            if (path_matches(trace->get_full_path(), pattern, kind,
+                have_regex ? &compiled_regex : NULL))
+            {
+                if (trace->subscriber_count > 0)
+                {
+                    if (--trace->subscriber_count == 0)
+                    {
+                        trace->set_event_active(false);
+                    }
+                    count++;
+                }
+            }
+        }
+    }
+
+    if (have_regex) regfree(&compiled_regex);
+    return count;
 }
 
 void vp::TraceEngine::check_trace_active(vp::Trace *trace, int event)
@@ -121,6 +288,9 @@ void vp::TraceEngine::check_trace_active(vp::Trace *trace, int event)
 	    if (this->event_active_get(full_path, file_path))
 		{
 		    trace->set_event_active(true, this->get_event_file(file_path));
+            // Same pin-via-refcount idea as check_event_active(): the
+            // --event=/include_raw filter is a synthetic permanent subscriber.
+            trace->subscriber_count++;
 		}
 		else
 		{
@@ -358,44 +528,64 @@ void vp::TraceEngine::init(vp::Component *top)
 
 void vp::TraceEngine::start()
 {
-    if (this->use_external_dumper)
+    if (this->use_external_dumper && this->vcd_user)
     {
-        for (Trace *trace: this->traces_array)
-        {
-            if (trace->is_event)
-            {
-                if (trace->comp->clock.get_engine())
-                {
-                    trace->clock_trace = &trace->comp->clock.get_engine()->clock_trace;
-                }
-
-                std::string clock_trace_name = "";
-                if (trace->clock_trace != NULL)
-                {
-                    clock_trace_name = trace->clock_trace->path;
-                }
-                int width = trace->type == gv::Vcd_event_type_real ? 8 : trace->type == gv::Vcd_event_type_string ? 0 : trace->width;
-                trace->user_trace = this->vcd_user->event_register(trace->get_full_path(), trace->type, width, "", clock_trace_name);
-            }
-        }
-
+        // Declare every event (vp::Event + legacy vp::Trace) to the Vcd_user
+        // so it can populate its signal-discovery registry (the GUI's signal
+        // browser, an FST dumper's symbol table, …) for *every* signal the
+        // platform exposes, independently of whether the signal is currently
+        // streaming. event_declare is a no-op by default so legacy Vcd_users
+        // (which only override event_register) keep working unchanged.
+        //
+        // Streaming is NOT enabled here. Events flow once a subscriber bumps
+        // the per-event refcount through event_subscribe(). The legacy
+        // --event=PAT / events/include_raw filter is already a "pinned"
+        // subscriber: check_event_active / check_trace_active activate the
+        // event AND bump subscriber_count at trace registration time. For
+        // those filter-pinned entries we additionally need to register the
+        // trace with the Vcd_user (which wasn't bound when reg_trace ran) so
+        // its event_update_*() calls have a handle to dispatch on.
         for (size_t i = 0; i < this->events_array.size(); i++)
         {
             Trace *trace = this->events_array[i];
-            if (trace && !this->is_event[i])
+            if (!trace) continue;
+
+            if (this->is_event[i])
             {
-                if (trace->comp->clock.get_engine())
+                vp::Event *event = (vp::Event *)trace;
+                event->declare_to(this->vcd_user);
+                // Filter-pinned vp::Event: enable_set(true) already ran (in
+                // check_event_active), but vcd_user was NULL back then. Re-run
+                // it now WITHOUT bumping subscriber_count so the vcd_user side
+                // (external_trace via event_register) gets wired up.
+                if (event->subscriber_count > 0 && event->active_get())
+                {
+                    event->enable_set(true);
+                }
+            }
+            else
+            {
+                if (trace->comp && trace->comp->clock.get_engine() &&
+                    trace->clock_trace == NULL)
                 {
                     trace->clock_trace = &trace->comp->clock.get_engine()->clock_trace;
                 }
-
-                std::string clock_trace_name = "";
-                if (trace->clock_trace != NULL)
+                std::string clock_trace_name = trace->clock_trace ?
+                    trace->clock_trace->path : "";
+                int width = trace->type == gv::Vcd_event_type_real ? 8 :
+                            trace->type == gv::Vcd_event_type_string ? 0 :
+                            trace->width;
+                this->vcd_user->event_declare(trace->get_full_path(),
+                    trace->type, width, "", clock_trace_name);
+                // Filter-pinned legacy vp::Trace: set_event_active(true, file)
+                // already ran (in check_trace_active). Wire it up to vcd_user
+                // so streamed values reach the GUI in addition to the file.
+                if (trace->subscriber_count > 0 && trace->user_trace == NULL)
                 {
-                    clock_trace_name = trace->clock_trace->path;
+                    trace->user_trace = this->vcd_user->event_register(
+                        trace->get_full_path(), trace->type, width, "",
+                        clock_trace_name);
                 }
-                int width = trace->type == gv::Vcd_event_type_real ? 8 : trace->type == gv::Vcd_event_type_string ? 0 : trace->width;
-                trace->user_trace = this->vcd_user->event_register(trace->get_full_path(), trace->type, width, "", clock_trace_name);
             }
         }
     }
@@ -496,50 +686,6 @@ void vp::TraceEngine::add_path(int events, const char *path, bool is_path)
     }
 
     regcomp(regex, path, 0);
-}
-
-void vp::TraceEngine::conf_trace(int event, std::string path_str, bool enabled)
-{
-    auto it = this->events.find(path_str.c_str());
-    if (it != this->events.end())
-    {
-        it->second->enable_set(enabled);
-    }
-    else
-    {
-        const char *file_path = "all.vcd";
-        const char *path = path_str.c_str();
-        char *delim = (char *)::index(path, '@');
-
-        if (delim)
-        {
-            *delim = 0;
-            file_path = delim + 1;
-        }
-
-        std::vector<vp::Trace *> traces;
-
-        vp::Trace *trace = this->get_trace_from_path(path);
-
-        if (trace != NULL)
-        {
-            traces.push_back(trace);
-        }
-
-        this->top->get_trace_from_path(traces, path_str);
-
-        for (vp::Trace *trace: traces)
-        {
-            if (event && trace->is_event)
-            {
-                trace->set_event_active(enabled, this->get_event_file(file_path));
-            }
-            else if (!event && !trace->is_event)
-            {
-                trace->set_active(enabled);
-            }
-        }
-    }
 }
 
 void vp::TraceEngine::add_trace_path(int events, std::string path)

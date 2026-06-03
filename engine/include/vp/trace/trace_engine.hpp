@@ -106,8 +106,18 @@ namespace vp {
         void add_path(int events, const char *path, bool is_path=false);
         void add_exclude_path(int events, const char *path);
         void add_trace_path(int events, std::string path);
-        void conf_trace(int event, std::string path, bool enabled);
         void add_exclude_trace_path(int events, std::string path);
+
+        // Match all declared events whose path satisfies `pattern` under
+        // `kind` and bump the per-event subscriber refcount. On the 0->1 edge
+        // the event is activated (dump_callback wired) so the bound Vcd_user
+        // (or the all.vcd file dumper, when no Vcd_user is bound) starts
+        // receiving values. Returns the count of matched entries.
+        int event_subscribe(std::string pattern, gv::Vcd::MatchKind kind);
+
+        // Symmetric teardown — drop the refcount; the 1->0 edge deactivates.
+        // Returns the count of matched entries.
+        int event_unsubscribe(std::string pattern, gv::Vcd::MatchKind kind);
         void reg_trace(vp::Trace *trace, int event, string path, string name);
 
         void start();

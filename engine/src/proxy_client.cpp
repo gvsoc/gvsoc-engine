@@ -263,15 +263,6 @@ void Gvsoc_proxy_client::vcd_disable()
 {
 }
 
-void Gvsoc_proxy_client::event_add(std::string path, bool is_regex)
-{
-}
-
-void Gvsoc_proxy_client::event_exclude(std::string path, bool is_regex)
-{
-}
-
-
 void *Gvsoc_proxy_client::get_component(std::string path)
 {
     std::string result = this->send_command("get_component " + path);

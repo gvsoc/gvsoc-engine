@@ -57,8 +57,6 @@ public:
     void vcd_bind(gv::Vcd_user *user) override;
     void vcd_enable() override;
     void vcd_disable() override;
-    void event_add(std::string path, bool is_regex) override;
-    void event_exclude(std::string path, bool is_regex) override;
     void *get_component(std::string path) override;
     std::string send_command(std::string command, bool keep_lock=false);
     int post_command(std::string command, bool keep_lock=false);

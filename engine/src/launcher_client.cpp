@@ -283,16 +283,25 @@ void gv::ControllerClient::vcd_disable()
     gv::Controller::get().vcd_disable(this);
 }
 
-void gv::ControllerClient::event_add(std::string path, bool is_regex)
+int gv::ControllerClient::event_subscribe(std::string pattern,
+    gv::Vcd::MatchKind kind)
 {
-    this->logger.info("Event add (path: %s, is_regex: %d)\n", path.c_str(), is_regex);
-    gv::Controller::get().event_add(path, is_regex, this);
+    this->logger.info("Event subscribe (pattern: %s, kind: %d)\n",
+        pattern.c_str(), (int)kind);
+    // Subscribe mutates per-event enable state (dump_callback / user_trace /
+    // file) without an explicit engine lock. Pointer-sized writes are atomic
+    // on x86-64 and the field order in enable_set / set_event_active means
+    // dump_callback going non-null implies the supporting fields are set
+    // first; race windows are narrow.
+    return gv::Controller::get().event_subscribe(pattern, kind, this);
 }
 
-void gv::ControllerClient::event_exclude(std::string path, bool is_regex)
+int gv::ControllerClient::event_unsubscribe(std::string pattern,
+    gv::Vcd::MatchKind kind)
 {
-    this->logger.info("Event Exclude (path: %s, is_regex: %d)\n", path.c_str(), is_regex);
-    gv::Controller::get().event_exclude(path, is_regex, this);
+    this->logger.info("Event unsubscribe (pattern: %s, kind: %d)\n",
+        pattern.c_str(), (int)kind);
+    return gv::Controller::get().event_unsubscribe(pattern, kind, this);
 }
 
 void *gv::ControllerClient::get_component(std::string path)

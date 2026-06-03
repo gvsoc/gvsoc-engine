@@ -461,19 +461,16 @@ void gv::GvProxySession::proxy_loop()
                     }
                     else
                     {
+                        vp::TraceEngine *te = this->proxy->top->traces.get_trace_engine();
                         if (words[1] == "add")
                         {
-                            // TODO regular expressions are too slow for the profiler, should be moved
-                            // to a new command
-                            //this->top->traces.get_trace_engine()->add_trace_path(1, words[2]);
-                            //this->top->traces.get_trace_engine()->check_traces();
-                            this->proxy->top->traces.get_trace_engine()->conf_trace(1, words[2], 1);
+                            te->event_subscribe(words[2],
+                                gv::Vcd::MatchKind::Regex);
                         }
                         else
                         {
-                            //this->top->traces.get_trace_engine()->add_exclude_trace_path(1, words[2]);
-                            //this->top->traces.get_trace_engine()->check_traces();
-                            this->proxy->top->traces.get_trace_engine()->conf_trace(1, words[2], 0);
+                            te->event_unsubscribe(words[2],
+                                gv::Vcd::MatchKind::Regex);
                         }
                         fprintf(reply_sock, "req=%s\n", req.c_str());
                     }

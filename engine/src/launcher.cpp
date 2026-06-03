@@ -537,14 +537,16 @@ void gv::Controller::vcd_disable(ControllerClient *client)
     this->instance->traces.get_trace_engine()->set_global_enable(0);
 }
 
-void gv::Controller::event_add(std::string path, bool is_regex, ControllerClient *client)
+int gv::Controller::event_subscribe(std::string pattern,
+    gv::Vcd::MatchKind kind, ControllerClient *client)
 {
-    this->instance->traces.get_trace_engine()->conf_trace(1, path, 1);
+    return this->instance->traces.get_trace_engine()->event_subscribe(pattern, kind);
 }
 
-void gv::Controller::event_exclude(std::string path, bool is_regex, ControllerClient *client)
+int gv::Controller::event_unsubscribe(std::string pattern,
+    gv::Vcd::MatchKind kind, ControllerClient *client)
 {
-    this->instance->traces.get_trace_engine()->conf_trace(1, path, 0);
+    return this->instance->traces.get_trace_engine()->event_unsubscribe(pattern, kind);
 }
 
 
