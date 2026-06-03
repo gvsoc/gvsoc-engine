@@ -659,6 +659,11 @@ gv::PowerReport *gv::Controller::report_get(ControllerClient *client)
 
 
 
+extern "C" int gv_api_version()
+{
+    return GV_API_VERSION;
+}
+
 gv::Gvsoc *gv::gvsoc_new(gv::GvsocConf *conf, std::string name)
 {
     if (conf && conf->proxy_socket != -1)

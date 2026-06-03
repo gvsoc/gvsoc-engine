@@ -24,6 +24,28 @@
 namespace gv {
 
     /**
+     * Compatibility version of the gv:: public API (Gvsoc / Vcd / Vcd_user / Io / Wire).
+     *
+     * BUMP THIS on every breaking change to those interfaces: changing or removing a
+     * virtual signature, reordering virtuals (vtable layout), or changing protocol
+     * semantics a consumer depends on. Purely additive changes that keep old consumers
+     * working need not bump it (bumping is always safe — it just forces a rebuild).
+     *
+     * v1 == trace declare/subscribe protocol (event_declare / event_subscribe).
+     */
+    #define GV_API_VERSION 1
+
+    /**
+     * Return the GV_API_VERSION the engine was built with.
+     *
+     * Strong C symbol baked into the engine shared library so a consumer (e.g. the GUI)
+     * can verify at runtime that the engine it actually loaded matches the API it was
+     * compiled against. The symbol is intentionally non-weak: a consumer linked against
+     * an engine predating this accessor fails to resolve it and refuses to start.
+     */
+    extern "C" int gv_api_version();
+
+    /**
      * IO request status.
      */
     enum Api_mode {
