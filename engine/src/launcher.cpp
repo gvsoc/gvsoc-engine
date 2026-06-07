@@ -333,6 +333,21 @@ void gv::Controller::sim_finished(int status)
     }
 }
 
+void gv::Controller::sim_stopped()
+{
+    this->logger.info("Simulation has stopped\n");
+
+    // Notify every client that the simulation paused (resumable), mirroring sim_finished which
+    // notifies a definitive end via has_ended.
+    for (gv::ControllerClient *client: this->clients)
+    {
+        if (client->user)
+        {
+            client->user->has_stopped();
+        }
+    }
+}
+
 int gv::Controller::join(ControllerClient *client)
 {
     // Make the calling client runnable so that it does not prevent simulation from running for
@@ -480,6 +495,18 @@ void gv::Controller::check_run()
     bool should_run = (this->run_count == this->clients.size() && this->lock_count == 0) ||
         (this->is_sim_finished && this->run_count > 0);
 
+    // Detect the genuine "all clients want to run" -> "paused" transition so we can notify
+    // clients with has_stopped(). We key on run_count (the persistent run/stop state) rather
+    // than the running flag, so transient engine_lock command locks (which force running false
+    // but leave run_count untouched) don't trigger a spurious has_stopped. We do NOT exclude the
+    // finished case: it also fires once at the finishing transition (redundant with has_ended but
+    // harmless), and crucially it keeps firing for genuine pauses after the run has ended, which a
+    // !is_sim_finished guard would suppress for good.
+    bool clients_want_run = this->clients.size() > 0 &&
+        this->run_count == this->clients.size();
+    bool notify_stopped = this->clients_want_run_prev && !clients_want_run;
+    this->clients_want_run_prev = clients_want_run;
+
     this->logger.info("Checking engine (should_run: %d, running: %d, run_count: %d, nb_clients: %d,"
         " lock_count: %d, finished: %d)\n",
         should_run, this->running, this->run_count, this->clients.size(), this->lock_count,
@@ -504,6 +531,12 @@ void gv::Controller::check_run()
         pthread_cond_broadcast(&this->cond);
     }
     pthread_mutex_unlock(&this->lock_mutex);
+
+    // Notify after releasing lock_mutex: user callbacks must not run under the engine lock.
+    if (notify_stopped)
+    {
+        this->sim_stopped();
+    }
 }
 
 void gv::Controller::client_quit(gv::ControllerClient *client)

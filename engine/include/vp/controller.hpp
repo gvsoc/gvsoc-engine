@@ -75,6 +75,9 @@ namespace gv {
         void flush(ControllerClient *client);
         // Terminate simulation. THis will mark it as over and will notified all clients
         void sim_finished(int status);
+        // Notify clients that the simulation has paused (stopped but resumable), as opposed to
+        // sim_finished which notifies a definitive end.
+        void sim_stopped();
         // BLock caller untiul simulation is over and every client is over
         int join(ControllerClient *client);
         // Lock launcher. This is a simple mutex, can be used to enter the launcher when we are
@@ -188,6 +191,10 @@ namespace gv {
         std::vector<ControllerClient *> clients;
         // True if simulation has terminated
         bool is_sim_finished = false;
+        // Previous "all clients want to run" state, used by check_run to fire has_stopped only
+        // on the genuine runnable -> paused transition (ignores transient engine_lock command
+        // locks, which don't change run_count).
+        bool clients_want_run_prev = false;
         // Mutex used for managing simulation state, i.e. the fields running, run_count and
         // lock_count
         pthread_mutex_t lock_mutex;
