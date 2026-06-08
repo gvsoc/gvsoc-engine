@@ -377,6 +377,31 @@ slave that fills back up between the ``retry()`` and the master's
 next ``req()`` simply returns ``IO_REQ_DENIED`` again, and the
 loop repeats until acceptance.
 
+.. _io_v2_synchronous_retry:
+
+**Retry must be serviced synchronously.** A master that receives
+``retry()`` **must** re-submit its held request(s) *inside the
+``retry()`` callback* — i.e. in the same cycle, before the call
+returns. It must not merely flag the request and defer the
+re-send to a later cycle (for example by enqueuing a clock event).
+
+This is a hard protocol constraint, not just a latency
+optimisation. Some slaves only keep their "ready to accept"
+window open for the duration of the synchronous ``retry()`` call.
+The canonical example is the zero-buffer arbiter ``log_ico_v2``:
+it denies every request, runs its round-robin arbitration, and
+then calls ``retry()`` on the winner while an internal
+``in_election`` flag is raised. Only while that flag is set does
+the next ``req()`` get forwarded inline to the bank; the flag is
+cleared as soon as ``retry()`` returns. A master that re-sends one
+cycle later misses the window, is denied again, and the two sides
+live-lock forever. Servicing the retry synchronously closes the
+loop within the same cycle.
+
+This matches AXI level-``READY`` semantics: ``retry()`` is the
+slave raising ``READY``, and the master's still-asserted ``VALID``
+beat is expected to transfer on that same edge.
+
 .. code-block:: cpp
 
     // Slave side
@@ -405,6 +430,9 @@ loop repeats until acceptance.
 .. code-block:: cpp
 
     // Master side — the retry callback set on out's IoMaster ctor.
+    // The re-send happens *here*, synchronously, inside the callback —
+    // never deferred to a later cycle (see "Retry must be serviced
+    // synchronously" above).
     static void retry(vp::Block *__this)
     {
         auto *_this = (MyComp *)__this;
@@ -412,7 +440,7 @@ loop repeats until acceptance.
         {
             vp::IoReqStatus st = _this->out.req(_this->denied_req);
             // st can be DONE / GRANTED (accepted), or DENIED again
-            // — loop on retry until it sticks.
+            // — leave denied_req set and wait for the next retry().
             if (st != vp::IO_REQ_DENIED) _this->denied_req = nullptr;
         }
     }

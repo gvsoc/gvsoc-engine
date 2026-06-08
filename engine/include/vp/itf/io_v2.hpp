@@ -33,6 +33,13 @@
 //                         preserved across the beats. Final beat carries
 //                         is_last = true and the burst's final status.
 //
+// DENIED / retry: when a slave returns IO_REQ_DENIED the master holds the
+// request and re-sends it when the slave later calls retry(). The re-send MUST
+// happen synchronously, inside the retry() callback (same cycle) — never
+// deferred to a later cycle. See IoSlave::retry() below and the developer
+// manual for why (some slaves only keep their accept window open during the
+// synchronous call; deferring deadlocks).
+//
 //                         The slave MAY also mutate addr to carry the per-beat
 //                         start address (= burst_addr + cumulative emitted
 //                         bytes). This deviates from AXI — where one AxADDR
@@ -294,10 +301,17 @@ class IoSlave : public vp::SlavePort {
      * Slave binding methods
      */
 
-    // Can be called to grant an IO request.
-    // Granting a request means that the request is accepted and owned by the slave
-    // and that the master can consider the request gone and then proceeed with
-    // the rest.
+    // Signals the bound master that this slave is ready to accept again after a
+    // previous IO_REQ_DENIED. Carries no request: the slave does not track which
+    // requests it denied; it just announces readiness and the master re-sends.
+    //
+    // Synchronous-retry constraint: the master MUST re-submit its held
+    // request(s) inside its retry callback — same cycle, before the call
+    // returns — and must NOT defer the re-send to a later cycle. Some slaves
+    // (e.g. the zero-buffer arbiter log_ico_v2) only keep their accept window
+    // open for the duration of this call; a master that re-sends a cycle later
+    // misses it and the two sides live-lock. See the developer manual
+    // (interfaces/io_v2.rst, "Retry must be serviced synchronously").
     inline void retry()
     {
         IoMasterRetryMeth *meth = (IoMasterRetryMeth *)this->master_retry_meth;
