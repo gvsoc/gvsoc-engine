@@ -35,6 +35,9 @@ namespace vp {
     #ifdef CONFIG_GVSOC_EVENT_ACTIVE
     inline void vp::Event::dump_value(uint8_t *value, int64_t time_delay)
     {
+        // Mark that a value has been produced even while inactive, so a later
+        // enable can replay the owner's current value (see enable_set).
+        this->has_value = true;
         EventDumpCallback callback = (EventDumpCallback)this->dump_callback;
 
         if (callback)
@@ -44,6 +47,7 @@ namespace vp {
     }
     inline void vp::Event::dump_value(uint8_t *value, uint8_t *flags, int64_t time_delay)
     {
+        this->has_value = true;
         EventDumpCallback callback = (EventDumpCallback)this->dump_callback;
 
         if (callback)

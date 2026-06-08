@@ -191,13 +191,12 @@ int vp::TraceEngine::event_subscribe(std::string pattern, gv::Vcd::MatchKind kin
             {
                 if (trace->subscriber_count++ == 0)
                 {
-                    if (trace->comp && trace->comp->clock.get_engine() &&
-                        trace->clock_trace == NULL)
+                    std::string clock_trace_name = "";
+                    if (trace->comp && trace->comp->clock.get_engine())
                     {
-                        trace->clock_trace = &trace->comp->clock.get_engine()->clock_trace;
+                        clock_trace_name =
+                            trace->comp->clock.get_engine()->clock_trace.get_path();
                     }
-                    std::string clock_trace_name = trace->clock_trace ?
-                        trace->clock_trace->path : "";
                     int width = trace->type == gv::Vcd_event_type_real ? 8 :
                                 trace->type == gv::Vcd_event_type_string ? 0 :
                                 trace->width;
@@ -565,13 +564,12 @@ void vp::TraceEngine::start()
             }
             else
             {
-                if (trace->comp && trace->comp->clock.get_engine() &&
-                    trace->clock_trace == NULL)
+                std::string clock_trace_name = "";
+                if (trace->comp && trace->comp->clock.get_engine())
                 {
-                    trace->clock_trace = &trace->comp->clock.get_engine()->clock_trace;
+                    clock_trace_name =
+                        trace->comp->clock.get_engine()->clock_trace.get_path();
                 }
-                std::string clock_trace_name = trace->clock_trace ?
-                    trace->clock_trace->path : "";
                 int width = trace->type == gv::Vcd_event_type_real ? 8 :
                             trace->type == gv::Vcd_event_type_string ? 0 :
                             trace->width;

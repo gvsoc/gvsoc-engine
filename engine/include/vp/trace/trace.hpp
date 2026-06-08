@@ -67,6 +67,13 @@ public:
     void dump_highz_next();
     std::string path_get();
     void enable_set(bool enabled, vp::Event_file *file=NULL);
+    // Register the owner's current-value storage so the value can be replayed
+    // on the enable 0->1 edge. Set by vp::Signal to its `value` member, which
+    // it keeps up to date on every set() regardless of activation. A late
+    // subscriber then sees the current state (e.g. a clock period set once at
+    // reset) instead of nothing. NULL (the default) disables the replay for
+    // raw events that don't register storage.
+    void value_storage_set(uint8_t *value) { this->enable_value = value; }
     // Declare this event to the given Vcd_user (no enablement / streaming
     // wiring). Invoked once per Vcd_user from TraceEngine::start() so the
     // Vcd_user sees every declared signal independently of the
@@ -120,6 +127,12 @@ private:
     vp::Event *next;
     bool has_next_value = false;
     int64_t next_value_cyclestamp;
+    // Current-value storage registered via value_storage_set(), replayed on
+    // the enable 0->1 edge. NULL when the owner opted out.
+    uint8_t *enable_value = NULL;
+    // Set on the first dump_value() so the enable replay only fires once a
+    // real value has been produced (avoids replaying uninitialized storage).
+    bool has_value = false;
 };
 #else
 class Event {
@@ -136,6 +149,7 @@ public:
     void dump_highz_next() {}
     std::string path_get() {return "";}
     void enable_set(bool enabled, vp::Event_file *file=NULL) {}
+    void value_storage_set(uint8_t *value) {}
     void declare_to(gv::Vcd_user *user) {}
     inline bool active_get() { return false; }
 
@@ -225,7 +239,6 @@ class Trace {
     Trace *next;
     std::string full_path;
     std::vector<std::function<void()>> callbacks;
-    vp::Trace *clock_trace = NULL;
     Event_file *file;
 };
 

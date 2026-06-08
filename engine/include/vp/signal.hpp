@@ -58,6 +58,13 @@ namespace vp {
             this->event.enable_set(true);
         }
 
+        // Full hierarchical path of the underlying event, used as the clock
+        // identity when this signal is a clock period (see ClockEngine).
+        inline std::string get_path()
+        {
+            return this->event.path_get();
+        }
+
         // Attach a free-form description string that the trace engine will
         // forward to the Vcd_user (via event_register) on enable(). Used by
         // dumpers (fst_dumper, …) to ship out-of-band metadata (signal type,
@@ -202,6 +209,8 @@ vp::Signal<T>::Signal(vp::Block &parent, std::string name, int width, bool do_re
     this->reset_value = reset;
     this->value_bytes = (uint8_t *)&this->value;
     this->reset_value_bytes = (uint8_t *)&this->reset_value;
+    // Let the event replay the current value to late subscribers (enable_set).
+    this->event.value_storage_set(this->value_bytes);
 }
 
 template<class T>
@@ -212,6 +221,8 @@ vp::Signal<T>::Signal(Block &parent, std::string name, int width, ResetKind rese
     this->reset_value = reset_value;
     this->value_bytes = (uint8_t *)&this->value;
     this->reset_value_bytes = (uint8_t *)&this->reset_value;
+    // Let the event replay the current value to late subscribers (enable_set).
+    this->event.value_storage_set(this->value_bytes);
 }
 
 template<class T>

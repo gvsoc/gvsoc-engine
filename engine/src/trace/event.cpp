@@ -381,7 +381,7 @@ void vp::Event::declare_to(gv::Vcd_user *user)
     std::string clock_trace_name = "";
     if (this->parent.clock.get_engine())
     {
-        clock_trace_name = this->parent.clock.get_engine()->clock_trace.get_full_path();
+        clock_trace_name = this->parent.clock.get_engine()->clock_trace.get_path();
     }
     user->event_declare(this->path_get(), this->type, this->width,
         this->description ? this->description : "", clock_trace_name);
@@ -396,7 +396,7 @@ void vp::Event::enable_set(bool enabled, vp::Event_file *file)
         std::string clock_trace_name = "";
         if (this->parent.clock.get_engine())
         {
-            clock_trace_name = this->parent.clock.get_engine()->clock_trace.get_full_path();
+            clock_trace_name = this->parent.clock.get_engine()->clock_trace.get_path();
         }
 
         gv::Vcd_user *vcd_user = this->parent.traces.get_trace_engine()->vcd_user;
@@ -461,6 +461,15 @@ void vp::Event::enable_set(bool enabled, vp::Event_file *file)
                 this->next_value = new uint8_t[8];
                 this->next_flags = new uint8_t[8];
             }
+        }
+
+        // Replay the owner's current value to this freshly-enabled subscriber.
+        // The value may have last been set before the subscription (e.g. a
+        // clock period dumped once at reset); without this the late subscriber
+        // would see no value at all. dump_value() emits at the current time.
+        if (this->enable_value != NULL && this->has_value)
+        {
+            this->dump_value(this->enable_value);
         }
     }
     else

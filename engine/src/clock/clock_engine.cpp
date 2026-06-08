@@ -507,8 +507,7 @@ void vp::ClockEngine::set_frequency(vp::Block *__this, int64_t frequency)
 void vp::ClockEngine::change_frequency(int64_t frequency)
 {
     this->out.set_frequency(frequency);
-    this->clock_trace.msg(vp::Trace::LEVEL_TRACE, "Changing frequency (frequency: %d)\n", this->period);
-    this->clock_trace.event((uint8_t *)&this->period);
+    this->clock_trace.set(this->period);
 }
 
 
@@ -541,11 +540,12 @@ void vp::ClockEngine::start()
 
 void vp::ClockEngine::reset(bool active)
 {
-    this->clock_trace.event((uint8_t *)&this->period);
+    this->clock_trace.set(this->period);
 }
 
 vp::ClockEngine::ClockEngine(vp::ComponentConf &config)
-: vp::Component(config), cycles(0), period(0), freq(0),
+: vp::Component(config), clock_trace(*this, "period", 64, false),
+    cycles(0), period(0), freq(0),
     apply_frequency_event(this, &vp::ClockEngine::apply_frequency_handler)
 {
     this->time_engine = config.time_engine;
@@ -559,8 +559,6 @@ vp::ClockEngine::ClockEngine(vp::ComponentConf &config)
 
     clock_in.set_set_frequency_meth(&ClockEngine::set_frequency);
     new_slave_port("clock_in", &clock_in);
-
-    this->traces.new_trace_event("period", &this->clock_trace, sizeof(this->period)*8);
 
     this->traces.new_trace_event_real("cycles", &this->cycles_trace);
 

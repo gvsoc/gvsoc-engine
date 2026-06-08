@@ -25,6 +25,7 @@
 #include "vp/time/time_engine.hpp"
 #include <vp/itf/clk.hpp>
 #include <vp/itf/implem/clock_class.hpp>
+#include <vp/signal.hpp>
 #include <vp/stats/stats.hpp>
 
 namespace vp
@@ -197,7 +198,12 @@ namespace vp
 
         vp::ClockSlave clock_in;
 
-        vp::Trace clock_trace;
+        // Clock period (in ps) exposed as a signal so its value is replayed to
+        // late GUI/VCD subscribers on enable, and so it serves as the clock
+        // identity (its path) referenced by every trace in this domain. Built
+        // with do_reset=false: the engine itself re-dumps the period in reset()
+        // and on each frequency change.
+        vp::Signal<int64_t> clock_trace;
 
         int factor;
         ClockEvent *delayed_queue = NULL;
