@@ -38,7 +38,9 @@
 // happen synchronously, inside the retry() callback (same cycle) — never
 // deferred to a later cycle. See IoSlave::retry() below and the developer
 // manual for why (some slaves only keep their accept window open during the
-// synchronous call; deferring deadlocks).
+// synchronous call; deferring deadlocks). retry() carries an IoRetryChannel
+// (READ / WRITE / ANY, default ANY) so read and write back-pressure can be
+// independent on masters that split the two; see IoRetryChannel.
 //
 //                         The slave MAY also mutate addr to carry the per-beat
 //                         start address (= burst_addr + cumulative emitted
@@ -111,13 +113,22 @@ typedef enum { IO_REQ_GRANTED, IO_REQ_DENIED, IO_REQ_DONE } IoReqStatus;
 
 typedef enum { IO_RESP_OK, IO_RESP_INVALID } IoRespStatus;
 
+// Channel a retry() pertains to. A master that splits traffic into independent
+// read / write channels (AXI AR/AW vs R) can be back-pressured on one channel
+// while the other keeps flowing. A slave names the channel it became ready on;
+// IO_RETRY_ANY (the default) means "all channels". The READ/WRITE values match
+// the request direction (is_write) so a master can index its per-channel state
+// directly. A channel-agnostic slave always uses IO_RETRY_ANY, and a
+// single-channel master ignores the value.
+typedef enum { IO_RETRY_READ = 0, IO_RETRY_WRITE = 1, IO_RETRY_ANY = 2 } IoRetryChannel;
+
 typedef IoReqStatus(IoSlaveReqMeth)(vp::Block *, vp::IoReq *);
 typedef IoReqStatus(IoSlaveReqMethMuxed)(vp::Block *, IoReq *, int id);
 
 typedef void(IoMasterRespMeth)(vp::Block *, vp::IoReq *);
 typedef void(IoMasterRespMethMuxed)(vp::Block *, vp::IoReq *, int id);
-typedef void(IoMasterRetryMeth)(vp::Block *);
-typedef void(IoMasterRetryMethMuxed)(vp::Block *, int id);
+typedef void(IoMasterRetryMeth)(vp::Block *, IoRetryChannel channel);
+typedef void(IoMasterRetryMethMuxed)(vp::Block *, int id, IoRetryChannel channel);
 
 class IoReq : public vp::QueueElem {
     friend class IoMaster;
@@ -305,6 +316,11 @@ class IoSlave : public vp::SlavePort {
     // previous IO_REQ_DENIED. Carries no request: the slave does not track which
     // requests it denied; it just announces readiness and the master re-sends.
     //
+    // `channel` names which channel became ready (see IoRetryChannel). A
+    // channel-agnostic slave leaves it at the default IO_RETRY_ANY ("all
+    // channels"); a master that splits read/write back-pressure re-sends only
+    // the held request(s) on that channel. A single-channel master ignores it.
+    //
     // Synchronous-retry constraint: the master MUST re-submit its held
     // request(s) inside its retry callback — same cycle, before the call
     // returns — and must NOT defer the re-send to a later cycle. Some slaves
@@ -312,10 +328,10 @@ class IoSlave : public vp::SlavePort {
     // open for the duration of this call; a master that re-sends a cycle later
     // misses it and the two sides live-lock. See the developer manual
     // (interfaces/io_v2.rst, "Retry must be serviced synchronously").
-    inline void retry()
+    inline void retry(IoRetryChannel channel = IO_RETRY_ANY)
     {
         IoMasterRetryMeth *meth = (IoMasterRetryMeth *)this->master_retry_meth;
-        meth((vp::Block *)this->get_remote_context());
+        meth((vp::Block *)this->get_remote_context(), channel);
     }
 
     // Can be called to reply to an IO request.
@@ -365,7 +381,7 @@ class IoSlave : public vp::SlavePort {
     // This is a stub setup when the slave is multiplexing the port so that we
     // can capture the master call and transform it into the slave call with the
     // right mux ID.
-    static inline void retry_muxed_stub(IoSlave *_this);
+    static inline void retry_muxed_stub(IoSlave *_this, IoRetryChannel channel);
 
     // This is a stub setup when the slave is multiplexing the port so that we
     // can capture the master call and transform it into the slave call with the
@@ -461,11 +477,11 @@ inline IoSlave::IoSlave(int id, IoSlaveReqMethMuxed *meth)
 {
 }
 
-inline void IoSlave::retry_muxed_stub(IoSlave *_this) {
+inline void IoSlave::retry_muxed_stub(IoSlave *_this, IoRetryChannel channel) {
     // The normal callback was tweaked in order to get there when the master is sending a
     // request. Now generate the normal call with the mux ID using the saved handler
     IoMasterRetryMethMuxed *meth = (IoMasterRetryMethMuxed *)_this->master_retry_meth_for_mux;
-    meth((vp::Block *)_this->master_context_for_mux, _this->master_mux_id);
+    meth((vp::Block *)_this->master_context_for_mux, _this->master_mux_id, channel);
 }
 
 inline void IoSlave::resp_muxed_stub(IoSlave *_this, IoReq *req) {

@@ -402,6 +402,28 @@ This matches AXI level-``READY`` semantics: ``retry()`` is the
 slave raising ``READY``, and the master's still-asserted ``VALID``
 beat is expected to transfer on that same edge.
 
+Per-channel retry
+~~~~~~~~~~~~~~~~~~
+
+``retry()`` takes an :cpp:enum:`vp::IoRetryChannel` argument —
+``IO_RETRY_READ``, ``IO_RETRY_WRITE`` or ``IO_RETRY_ANY`` (the
+default). It lets a master that splits traffic into independent
+read and write channels (AXI ``AR``/``R`` vs ``AW``/``W``) be
+back-pressured on one channel while the other keeps flowing: a
+denied write stalls only the write channel, and the slave names
+that channel when it becomes ready again. ``READ``/``WRITE`` map to
+the request direction (``is_write``), so a master can index its
+per-channel state directly.
+
+A channel-agnostic slave leaves the argument at ``IO_RETRY_ANY``
+(``in.retry()``), which means "every stalled channel is ready" —
+the master re-sends all held requests. A single-channel master
+ignores the value. Today every slave emits ``IO_RETRY_ANY``;
+``READ``/``WRITE`` are available for slaves that model independent
+read/write readiness. ``interco/router_v2`` (the ``beat`` flavour)
+is the reference consumer: it tracks one stall per (output,
+channel) and re-issues only the channels a retry covers.
+
 .. code-block:: cpp
 
     // Slave side
