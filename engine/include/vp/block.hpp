@@ -39,6 +39,7 @@ namespace vp {
     class SignalCommon;
     class RegisterCommon;
     class TraceEngine;
+    class DebugMemIf;
     class reg;
     class MemCheck;
     class reg_1;
@@ -205,6 +206,19 @@ namespace vp {
          */
         virtual std::string handle_command(gv::GvProxy *proxy, FILE *req_file, FILE *reply_file,
             std::vector<std::string> args, std::string req) { return ""; }
+
+        /**
+         * @brief Get the block's backdoor debug-memory interface
+         *
+         * Blocks supporting zero-time backdoor debug accesses (see
+         * vp/debug_mem.hpp) overload this method to return their
+         * vp::DebugMemIf implementation. Debug tools resolve the interface
+         * through this hook when walking the interconnect bindings.
+         *
+         * @return The interface, or nullptr if backdoor accesses are not
+         *     supported.
+         */
+        virtual vp::DebugMemIf *debug_mem_if() { return nullptr; }
 
         /**
          * @brief Power supply method method

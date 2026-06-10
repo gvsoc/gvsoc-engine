@@ -450,7 +450,12 @@ class Router(object):
         self.proxy = proxy
         self.component = proxy._get_component(path)
 
-
+    def _check_reply(self, reply):
+        # Component commands reply with the handle_command return string
+        # ('err=0' / 'err=1') carried in the msg field.
+        reply = reply.strip()
+        if reply.startswith('err=') and reply != 'err=0':
+            raise RuntimeError('Memory access failed (%s)' % reply)
 
     def mem_write(self, addr: int, size: int, values: bytes):
         """Inject a memory write.
@@ -473,7 +478,7 @@ class Router(object):
         self.proxy.socket.send(values)
         self.proxy._unlock_cmd()
 
-        self.proxy.reader.wait_reply(req)
+        self._check_reply(self.proxy.reader.wait_reply(req))
 
     def mem_read(self, addr: int, size: int) -> bytes:
         """Inject a memory read.
@@ -500,7 +505,13 @@ class Router(object):
 
         self.proxy._unlock_cmd()
 
-        self.proxy.reader.wait_reply(req)
+        # The payload line stores an empty reply under the same req before
+        # the final err= line arrives; if we picked it up, wait for the
+        # real one.
+        status = self.proxy.reader.wait_reply(req)
+        if not status.startswith('err='):
+            status = self.proxy.reader.wait_reply(req)
+        self._check_reply(status)
 
         return reply
 

@@ -10,6 +10,7 @@ set(GVSOC_ENGINE_CXX_SRCS
     "src/signal.cpp"
     "src/queue.cpp"
     "src/mapping_tree.cpp"
+    "src/debug_mem.cpp"
     "src/proxy.cpp"
     "src/launcher.cpp"
     "src/launcher_client.cpp"
