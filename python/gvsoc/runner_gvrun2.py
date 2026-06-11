@@ -268,8 +268,10 @@ class Runner():
         # base name with ``,`` -> ``_``, ``/`` -> ``.``, ``:`` -> ``_``, then
         # collapses any remaining non-identifier characters to ``_`` for the
         # library name.
+        # The check is skipped when generating the components (build time), since the
+        # tree library of this target is not built yet at that point.
         target_name = getattr(args, 'target', None) or getattr(gapy_target, 'name', None)
-        if target_name:
+        if target_name and getattr(args, 'component_file', None) is None:
             import re
             cfg_base = (target_name
                 .replace(',', '_')
@@ -877,11 +879,12 @@ class Target(gvrun.target.Target):
 
         if model is None:
             # New way of instantiating the model through gvrun
-            try:
+            import inspect
+            if 'config' in inspect.signature(self.model.__init__).parameters:
                 # First try with new config tree
                 self.model = self.model(parent=self, name=name, config=self.config)
-            except:
-                # Otherwise call without to kepp compatibility
+            else:
+                # Otherwise call without to keep compatibility
                 self.model = self.model(parent=self, name=name)
         else:
             # Old way through gapy

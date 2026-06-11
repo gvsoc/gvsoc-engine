@@ -109,7 +109,10 @@ if(DEFINED GVSOC_TARGETS)
 
         # Gapy is used to extract the list of components out of the specified target
 
-        if(DEFINED ENV{USE_GVRUN})
+        # Targets carrying gvrun qualifiers (attr./config.) must be generated with
+        # gvrun: gapy cannot apply those qualifiers, so the generated tree would
+        # not match the runtime systree.
+        if(DEFINED ENV{USE_GVRUN} OR target MATCHES ":(attr|config)\\.")
             set(GAPY_CMD gvrun --target=${target} ${GAPY_TARGETS_DIR_OPT}
                 --platform=gvsoc
                 --builddir=${CMAKE_CURRENT_BINARY_DIR}
