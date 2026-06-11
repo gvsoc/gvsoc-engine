@@ -344,6 +344,17 @@ class Runner():
 
         self.args = args
 
+    def _gen_legacy_sources(self, component, builddir, installdir):
+        """Invoke the legacy gen(builddir, installdir) hooks on the whole tree.
+
+        Legacy-style models like the ISS use them to emit their generated
+        sources (e.g. isa_*.cpp) when components are being generated."""
+        gen = getattr(component, 'gen', None)
+        if callable(gen):
+            gen(builddir, installdir)
+        for child in getattr(component, 'components', {}).values():
+            self._gen_legacy_sources(child, builddir, installdir)
+
     def _collect_config_classes(self, component):
         """Walk the component tree and collect unique Config classes for header generation.
 
@@ -457,6 +468,10 @@ class Runner():
                 raise RuntimeError('Install diretory must be specified when components are being generated')
 
             self.target.generate_all(args.builddir)
+
+            # Also invoke the legacy generation hooks, which legacy-style models
+            # like the ISS use to emit their generated sources
+            self._gen_legacy_sources(self.target, args.builddir, args.installdir)
 
             # Generate config headers and per-target tree .cpp
             self._generate_platform_tree(self.target, args.builddir, args.component_file)
