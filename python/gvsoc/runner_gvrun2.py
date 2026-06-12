@@ -893,9 +893,14 @@ class Target(gvrun.target.Target):
             [args, otherArgs] = parser.parse_known_args()
 
         if model is None:
-            # New way of instantiating the model through gvrun
+            # New way of instantiating the model through gvrun. The signature is taken
+            # from the callable itself so that wrappers like functools.partial resolve
+            # to the wrapped model.
             import inspect
-            if 'config' in inspect.signature(self.model.__init__).parameters:
+            parameters = inspect.signature(self.model).parameters
+            takes_config = 'config' in parameters or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+            if takes_config:
                 # First try with new config tree
                 self.model = self.model(parent=self, name=name, config=self.config)
             else:
