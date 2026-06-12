@@ -910,11 +910,31 @@ class Target(gvrun.target.Target):
             # Old way through gapy
             self.model = model(parent=self, name=name, parser=parser, options=options)
 
+        self.__add_gdbserver()
+
         self.args = args
         self.parser = parser
         self.options = options
         self.rtl_cosim_runner = rtl_cosim_runner
         self.runner = None
+
+    def __add_gdbserver(self):
+        # Every target gets a gdbserver component so that --gdbserver works
+        # without per-target wiring. The component is inert unless the option
+        # enables it, registers the engine service the cores look up, and
+        # needs neither clock nor bindings. Targets may still instantiate
+        # their own (e.g. to pin default_hartid), in which case we must not
+        # add a second one: the engine service registry silently keeps only
+        # the last registered instance.
+        from gdbserver.gdbserver import Gdbserver
+
+        def has_gdbserver(component):
+            if isinstance(component, Gdbserver):
+                return True
+            return any(has_gdbserver(child) for child in component.components.values())
+
+        if isinstance(self.model, st.Component) and not has_gdbserver(self.model):
+            Gdbserver(self.model, 'gdbserver')
 
     def get_systree(self) -> SystemTreeNode | None:
         return self.model

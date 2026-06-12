@@ -830,7 +830,29 @@ if os.environ.get('USE_GVRUN') is None:
                 # Old way through gapy
                 self.model = model(parent=self, name=None, parser=parser, options=options)
 
+            self.__add_gdbserver()
+
             self.runner = Runner(parser, args, options, self, self.model, rtl_cosim_runner=rtl_cosim_runner)
+
+        def __add_gdbserver(self):
+            # Every target gets a gdbserver component so that --gdbserver works
+            # without per-target wiring. The component is inert unless the
+            # option enables it, registers the engine service the cores look
+            # up, and needs neither clock nor bindings. Targets may still
+            # instantiate their own (e.g. to pin default_hartid), in which
+            # case we must not add a second one: the engine service registry
+            # silently keeps only the last registered instance. This hook is
+            # duplicated in runner_gvrun2.Target — both must stay in sync so
+            # the build-time generated tree matches the run-time one.
+            from gdbserver.gdbserver import Gdbserver
+
+            def has_gdbserver(component):
+                if isinstance(component, Gdbserver):
+                    return True
+                return any(has_gdbserver(child) for child in component.components.values())
+
+            if isinstance(self.model, st.Component) and not has_gdbserver(self.model):
+                Gdbserver(self.model, 'gdbserver')
 
         def get_path(self, child_path=None, gv_path=False, *kargs, **kwargs):
             return child_path
