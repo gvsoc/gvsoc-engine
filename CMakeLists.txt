@@ -88,6 +88,14 @@ foreach(subdir ${GVSOC_MODULES})
     set(GAPY_TARGETS_DIR_OPT ${GAPY_TARGETS_DIR_OPT} --target-dir=${subdir})
 endforeach()
 
+# Extra modules are only visible to the config generation and to the generated
+# components, not to the modules models. This keeps the models compile commands
+# stable when extra modules are given (e.g. by testsuite builds), so that they
+# do not get recompiled and reinstalled.
+foreach(subdir ${GVSOC_EXTRA_MODULES})
+    set(GAPY_TARGETS_DIR_OPT ${GAPY_TARGETS_DIR_OPT} --target-dir=${subdir})
+endforeach()
+
 set(TARGET_CONFIG_DIR ${CMAKE_BINARY_DIR}/gvsoc/configs)
 file(MAKE_DIRECTORY ${TARGET_CONFIG_DIR})
 
@@ -219,6 +227,7 @@ foreach(component ${COMPONENTS})
     string(REPLACE " " ";" SRCS_LIST "${CONFIG_SRCS_${component}}")
     vp_model(NAME ${component}
         SOURCES "${SRCS_LIST}"
+        INCLUDES "${GVSOC_EXTRA_MODULES}"
     )
     # Link any libraries declared from the generator via Component.add_libraries().
     if(NOT "${CONFIG_LIBS_${component}}" STREQUAL "")

@@ -62,7 +62,7 @@ function(vp_block)
             target_include_directories(${VP_MODEL_NAME_OPTIM} PRIVATE ${X})
         endforeach()
 
-        foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+        foreach(subdir ${VP_MODEL_INCLUDES})
             target_include_directories(${VP_MODEL_NAME_OPTIM} PRIVATE ${subdir})
         endforeach()
 
@@ -92,7 +92,7 @@ function(vp_block)
             target_include_directories(${VP_MODEL_NAME_OPTIM_M32} PRIVATE ${X})
         endforeach()
 
-        foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+        foreach(subdir ${VP_MODEL_INCLUDES})
             target_include_directories(${VP_MODEL_NAME_OPTIM_M32} PRIVATE ${subdir})
         endforeach()
 
@@ -126,7 +126,7 @@ function(vp_block)
             target_include_directories(${VP_MODEL_NAME_PROFILE} PRIVATE ${X})
         endforeach()
 
-        foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+        foreach(subdir ${VP_MODEL_INCLUDES})
             target_include_directories(${VP_MODEL_NAME_PROFILE} PRIVATE ${subdir})
         endforeach()
 
@@ -159,7 +159,7 @@ function(vp_block)
             target_include_directories(${VP_MODEL_NAME_DEBUG} PRIVATE ${X})
         endforeach()
 
-        foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+        foreach(subdir ${VP_MODEL_INCLUDES})
             target_include_directories(${VP_MODEL_NAME_DEBUG} PRIVATE ${subdir})
         endforeach()
 
@@ -191,7 +191,7 @@ function(vp_block)
             target_include_directories(${VP_MODEL_NAME_DEBUG_M32} PRIVATE ${X})
         endforeach()
 
-        foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+        foreach(subdir ${VP_MODEL_INCLUDES})
             target_include_directories(${VP_MODEL_NAME_DEBUG_M32} PRIVATE ${subdir})
         endforeach()
 
@@ -263,7 +263,7 @@ function(vp_model)
                 target_include_directories(${VP_MODEL_NAME_OPTIM} PRIVATE ${X})
             endforeach()
 
-            foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+            foreach(subdir ${VP_MODEL_INCLUDES})
                 target_include_directories(${VP_MODEL_NAME_OPTIM} PRIVATE ${subdir})
             endforeach()
 
@@ -296,7 +296,7 @@ function(vp_model)
                 target_include_directories(${VP_MODEL_NAME_OPTIM_M32} PRIVATE ${X})
             endforeach()
 
-            foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+            foreach(subdir ${VP_MODEL_INCLUDES})
                 target_include_directories(${VP_MODEL_NAME_OPTIM_M32} PRIVATE ${subdir})
             endforeach()
 
@@ -328,7 +328,7 @@ function(vp_model)
                 target_include_directories(${VP_MODEL_NAME_PROFILE} PRIVATE ${X})
             endforeach()
 
-            foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+            foreach(subdir ${VP_MODEL_INCLUDES})
                 target_include_directories(${VP_MODEL_NAME_PROFILE} PRIVATE ${subdir})
             endforeach()
 
@@ -363,7 +363,7 @@ function(vp_model)
                 target_include_directories(${VP_MODEL_NAME_DEBUG} PRIVATE ${X})
             endforeach()
 
-            foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+            foreach(subdir ${VP_MODEL_INCLUDES})
                 target_include_directories(${VP_MODEL_NAME_DEBUG} PRIVATE ${subdir})
             endforeach()
 
@@ -397,7 +397,7 @@ function(vp_model)
                 target_include_directories(${VP_MODEL_NAME_DEBUG_M32} PRIVATE ${X})
             endforeach()
 
-            foreach(subdir ${VP_MODEL_INCLUDE_DIRS})
+            foreach(subdir ${VP_MODEL_INCLUDES})
                 target_include_directories(${VP_MODEL_NAME_DEBUG_M32} PRIVATE ${subdir})
             endforeach()
 
