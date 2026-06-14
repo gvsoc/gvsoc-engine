@@ -85,4 +85,6 @@ vp::Top::~Top()
     delete this->stats_engine;
     delete this->power_engine;
     delete this->trace_engine;
+    delete this->time_engine;
+    delete this->memcheck;
 }

@@ -93,6 +93,17 @@ void gv::ControllerClient::start()
     gv::Controller::get().start(this);
 }
 
+void gv::ControllerClient::restart()
+{
+    this->logger.info("Restart\n");
+    // The engine lock parks the engine thread outside any model code so that the whole
+    // system can be destroyed and instantiated again. The caller must have stopped the
+    // simulation first, so that it stays paused at time 0 once the lock is released.
+    gv::Controller::get().engine_lock();
+    gv::Controller::get().restart(this);
+    gv::Controller::get().engine_unlock();
+}
+
 void gv::ControllerClient::run()
 {
     this->logger.info("Run\n");

@@ -118,6 +118,11 @@ void gv::Controller::init(gv::GvsocConf *conf)
 
         if (conf)
         {
+            // Keep a copy of the configuration path: the GvsocConf object belongs to the
+            // caller and may not outlive this call, and restart needs the path to
+            // instantiate the system again.
+            this->config_path = conf->config_path;
+
             this->handler = new vp::Top(conf->config_path, this->is_async, this);
 
             this->instance = this->handler->top_instance;
@@ -239,6 +244,86 @@ void gv::Controller::close(ControllerClient *client)
     delete top;
 }
 
+void gv::Controller::restart(ControllerClient *client)
+{
+    // Restart is not supported when the engine is driven by an external SystemC kernel
+    // since SystemC time cannot be rewound in-process, nor when the proxy is enabled
+    // since it keeps references to the system being destroyed.
+    if (this->systemc_enabled || this->proxy)
+    {
+        fprintf(stderr, "Ignoring restart request, it is not supported %s\n",
+            this->systemc_enabled ? "on SystemC platforms" : "when the proxy is enabled");
+        return;
+    }
+
+    this->logger.info("Restarting system\n");
+
+    // Teardown, mirroring close(). The engine is locked so the engine thread is parked
+    // outside any model code and will pick up the new system once it resumes.
+    // The stats dump done in close() is skipped on purpose since restart discards the run.
+    this->handler->get_trace_engine()->flush();
+    this->instance->stop_all();
+    this->instance->unbuild_all();
+
+    // Cancel any pending step before the step block is destroyed. Heap-allocated
+    // asynchronous step events are leaked since only their callback may free them,
+    // and we don't want step-end notifications to fire during restart.
+    while (this->step_block->time.first_event)
+    {
+        this->step_block->time.first_event->cancel();
+    }
+
+    // Preallocated client step events are attached to the step block of the system
+    // being destroyed and must be created again on the new one.
+    for (ControllerClient *current: this->clients)
+    {
+        delete current->step_event;
+        current->step_event = NULL;
+    }
+    delete this->step_block;
+
+    delete this->instance;
+    delete this->handler;
+
+    // Back to the state of a freshly opened simulation
+    this->is_sim_finished = false;
+    this->notified_finish = false;
+    this->retval = -1;
+    this->clients_want_run_prev = false;
+
+    // Rebuild, mirroring init(), open() and start(). The engine and sigint threads are
+    // not recreated, they stay around and dereference the new handler once resumed.
+    this->handler = new vp::Top(this->config_path, this->is_async, this);
+    this->instance = this->handler->top_instance;
+    this->instance->set_launcher(this);
+
+    this->step_block = new vp::Block(NULL, "stepper", this->handler->get_time_engine(),
+        this->handler->get_trace_engine(), this->handler->get_power_engine());
+
+    for (ControllerClient *current: this->clients)
+    {
+        this->client_step_event_create(current);
+    }
+
+    // Re-apply the user bindings to the new system
+    if (this->user)
+    {
+        this->handler->get_time_engine()->bind_to_launcher(this->user);
+    }
+    if (this->vcd_user)
+    {
+        this->instance->traces.get_trace_engine()->set_vcd_user(this->vcd_user);
+    }
+
+    this->instance->build_all();
+
+    // This declares and registers trace events again to the VCD user, with the same
+    // paths as the previous system
+    this->handler->start();
+    this->instance->reset_all(true);
+    this->instance->reset_all(false);
+}
+
 int64_t gv::Controller::run_sync()
 {
     // Since the stop mechanism is lock-free, we need to issue memory barrier to see latest
@@ -316,12 +401,13 @@ void gv::Controller::sim_finished(int status)
         this->retval = status;
 
 
-        // Cancel any pending step
+        // Cancel any pending step. Dequeue before exec: asynchronous step events delete
+        // themselves in their callback, so exec must be the last access to the event.
         while (this->step_block->time.first_event)
         {
             vp::TimeEvent *event = this->step_block->time.first_event;
-            event->exec();
             event->cancel();
+            event->exec();
         }
 
         for (gv::ControllerClient *client: this->clients)
@@ -557,6 +643,8 @@ gv::Wire_binding *gv::Controller::wire_bind(gv::Wire_user *user, std::string com
 
 void gv::Controller::vcd_bind(gv::Vcd_user *user, ControllerClient *client)
 {
+    // Remember the user so that it can be bound again to the new trace engine on restart
+    this->vcd_user = user;
     this->instance->traces.get_trace_engine()->set_vcd_user(user);
 }
 
@@ -709,7 +797,7 @@ gv::Gvsoc *gv::gvsoc_new(gv::GvsocConf *conf, std::string name)
     }
 }
 
-void gv::Controller::register_client(ControllerClient *client)
+void gv::Controller::client_step_event_create(ControllerClient *client)
 {
     // In synchronous mode, since only one thread is allowed to do the step, we use a single
     // event and preallocate it for performance reason.
@@ -717,6 +805,11 @@ void gv::Controller::register_client(ControllerClient *client)
     client->step_event->set_callback(this->step_sync_handler);
     client->step_event->get_args()[0] = this;
     client->step_event->get_args()[1] = client;
+}
+
+void gv::Controller::register_client(ControllerClient *client)
+{
+    this->client_step_event_create(client);
 
     // Add client to list of current clients
     this->clients.push_back(client);

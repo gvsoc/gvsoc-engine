@@ -67,6 +67,10 @@ namespace gv {
         void start(ControllerClient *client);
         // Close system models
         void close(ControllerClient *client);
+        // Tear down the whole system and instantiate it again from the stored configuration,
+        // leaving the simulation stopped at time 0 as after a fresh open/start.
+        // Must be called with the engine locked (see ControllerClient::restart).
+        void restart(ControllerClient *client);
         // Run events until a stop request is received.
         int64_t run_sync();
         // Ask internal loop to run events until a stop request is received
@@ -159,17 +163,28 @@ namespace gv {
         // Static handler used as time event callback, used to stop engine when a step is reached,
         // for synchronous mode
         static void step_sync_handler(vp::Block *__this, vp::TimeEvent *event);
+        // Allocate and setup the preallocated synchronous step event of a client.
+        // Used when the client registers and again on restart, since step events are
+        // attached to the step block of the current system.
+        void client_step_event_create(ControllerClient *client);
 
         // Internal logger
         Logger logger;
         // Main GVSOC controller configuration
         gv::GvsocConf *conf;
+        // Path of the configuration the system was instantiated from. Copied from the
+        // configuration at init time since the GvsocConf object belongs to the caller and may
+        // not outlive init(). Used to instantiate the system again on restart.
+        std::string config_path;
         // Top model class containing all engines
         vp::Top *handler;
         // Simulation retval set when simulation terminates
         int retval = -1;
         // User launcher to be notified when an event is enqueued
-        gv::Gvsoc_user *user;
+        gv::Gvsoc_user *user = NULL;
+        // User notified about VCD events. Remembered so that it can be bound again to the new
+        // trace engine on restart.
+        gv::Vcd_user *vcd_user = NULL;
         // Tell if main controller is asynchronous
         bool is_async;
         // True when the configuration contains SystemC components. In this case the engine
@@ -225,6 +240,7 @@ namespace gv {
         void close() override;
         void run() override;
         void start() override;
+        void restart() override;
         void flush() override;
         int64_t stop() override;
         double get_instant_power(double &dynamic_power, double &static_power) override;

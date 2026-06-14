@@ -33,8 +33,9 @@ namespace gv {
      *
      * v1 == trace declare/subscribe protocol (event_declare / event_subscribe).
      * v2 == ComponentTreeNode carries TreeMapping address maps (layout change).
+     * v3 == Gvsoc::restart() added (a consumer calling it needs an engine providing it).
      */
-    #define GV_API_VERSION 2
+    #define GV_API_VERSION 3
 
     /**
      * Return the GV_API_VERSION the engine was built with.
@@ -882,6 +883,30 @@ namespace gv {
          * @returns The timestamp of the next event to be executed or -1 if there is no event.
          */
         virtual int64_t get_next_event_time() { return -1; }
+
+        /**
+         * Restart the simulated system
+         *
+         * This tears down the whole simulated system and instantiates it again from the same
+         * configuration, as if GVSOC had just been opened and started: all components are
+         * destroyed and re-created (so their state is back to power-on), time is back to 0 and
+         * the simulation is left stopped, waiting for run() to be called.
+         * The caller must have stopped the simulation first (see stop()).
+         * Bindings registered with bind() and vcd_bind() are re-applied to the new system, and
+         * trace events are declared/registered again to the VCD user with the same paths.
+         * Dynamic event subscriptions (event_subscribe) are lost and must be re-issued by the
+         * caller. Any component handle obtained with get_component(), io_bind() or wire_bind()
+         * is invalidated.
+         * Restart is refused (with an error message) on SystemC-enabled platforms (SystemC time
+         * cannot be rewound in-process) and when the proxy is enabled.
+         * Can only be called by the main controller.
+         *
+         * NOTE: declared last on purpose so that the vtable slots of the existing entries are
+         * unchanged; only this new slot is added. GV_API_VERSION is bumped accordingly so a
+         * consumer built against this header refuses to run against an engine that predates
+         * restart() (and would have no slot for it) rather than calling into a missing entry.
+         */
+        virtual void restart() {}
     };
 
 
