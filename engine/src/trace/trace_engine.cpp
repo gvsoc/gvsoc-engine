@@ -184,27 +184,17 @@ int vp::TraceEngine::event_subscribe(std::string pattern, gv::Vcd::MatchKind kin
             // activation flips set_event_active(true) which wires
             // dump_callback so subsequent vp::Trace::event() / event_real() /
             // event_string() calls push values into the trace pipe. With a
-            // Vcd_user bound we also invoke event_register on the 0->1 edge
+            // Vcd_user bound we also invoke event_enable on the 0->1 edge
             // so the GUI's TraceCapturer allocates a DbTrace for the id.
             if (path_matches(trace->get_full_path(), pattern, kind,
                 have_regex ? &compiled_regex : NULL))
             {
                 if (trace->subscriber_count++ == 0)
                 {
-                    std::string clock_trace_name = "";
-                    if (trace->comp && trace->comp->clock.get_engine())
-                    {
-                        clock_trace_name =
-                            trace->comp->clock.get_engine()->clock_trace.get_path();
-                    }
-                    int width = trace->type == gv::Vcd_event_type_real ? 8 :
-                                trace->type == gv::Vcd_event_type_string ? 0 :
-                                trace->width;
+                    // Allocate the streaming handle and mark the enable in one call.
                     if (this->vcd_user && trace->user_trace == NULL)
                     {
-                        trace->user_trace = this->vcd_user->event_register(
-                            trace->get_full_path(), trace->type, width, "",
-                            clock_trace_name);
+                        this->event_enable_now(trace, true);
                     }
                     trace->set_event_active(true, file_dst);
                 }
@@ -580,9 +570,7 @@ void vp::TraceEngine::start()
                 // so streamed values reach the GUI in addition to the file.
                 if (trace->subscriber_count > 0 && trace->user_trace == NULL)
                 {
-                    trace->user_trace = this->vcd_user->event_register(
-                        trace->get_full_path(), trace->type, width, "",
-                        clock_trace_name);
+                    this->event_enable_now(trace, true);
                 }
             }
         }

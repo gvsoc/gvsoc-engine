@@ -123,8 +123,11 @@ private:
     EventParseCallback parse_callback;
     void (*next_value_fill_callback)(vp::Event *event, uint8_t *value, uint8_t *flags) = NULL;
     int64_t id;
-    void *external_trace;
-    gv::Vcd_user *vcd_user;
+    // Set by enable_set(true) when streaming to a Vcd_user; stay NULL for an event that is never
+    // enabled, so enable_set(false) (called by check_event_active during init) skips the disable
+    // marker instead of dereferencing a wild pointer.
+    void *external_trace = NULL;
+    gv::Vcd_user *vcd_user = NULL;
     uint8_t *next_value;
     uint8_t *next_flags;
     vp::Event *next;

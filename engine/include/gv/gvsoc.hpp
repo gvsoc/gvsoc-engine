@@ -289,12 +289,23 @@ namespace gv {
             std::string description, std::string clock_path="") { return NULL; }
 
         /**
-         * Called by GVSOC when an event is actually enabled for streaming
-         * (regex match, explicit include_raw, or event_subscribe()).
-         * Returns the handle threaded back into event_update_*() calls.
+         * Called by GVSOC on every enable/disable transition of a streamed event (regex match,
+         * explicit include_raw, or event_subscribe()).
+         *
+         *  enabled=true : the event starts being dumped. Allocate (or look up) and return the handle
+         *      threaded back into event_update_*() calls. When timestamp > 0 the event had no data
+         *      before now, so the disabled period ending here is closed: [0, timestamp) on the
+         *      first-ever enable (the no-data lead-in), or [last-disable, timestamp) on a re-enable.
+         *  enabled=false: the event stops being dumped. Opens a disabled period at timestamp (closed
+         *      by the next enable, or left open to the end of the trace).
+         *
+         * The default implementation is a no-op returning NULL, so consumers that don't care about
+         * streaming (e.g. the VCD file dumper) are unaffected. event_declare() is separate and still
+         * used to discover the full signal set.
          */
-        virtual void *event_register(std::string path, Vcd_event_type type, int width,
-            std::string description, std::string clock_path="") { return NULL; }
+        virtual void *event_enable(std::string path, Vcd_event_type type, int width,
+            std::string description, std::string clock_path, bool enabled, int64_t timestamp)
+            { return NULL; }
 
         /**
          * Called by GVSOC to update the value of a logical VCD event.

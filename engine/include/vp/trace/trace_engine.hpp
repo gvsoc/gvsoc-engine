@@ -76,6 +76,10 @@ namespace vp {
         static void dump_event_64(vp::TraceEngine *__this, vp::Trace *trace, int64_t timestamp, int64_t cycles, uint8_t *event, uint8_t *flags);
         static void dump_event_real(vp::TraceEngine *__this, vp::Trace *trace, int64_t timestamp, int64_t cycles, uint8_t *event, uint8_t *flags);
         static void dump_event_string(vp::TraceEngine *__this, vp::Trace *trace, int64_t timestamp, int64_t cycles, uint8_t *event, uint8_t *flags);
+        // Mark a legacy vp::Trace enabled/disabled directly on the Vcd_user (see vp::Event::
+        // enable_set); on enable it allocates and returns the streaming handle (trace->user_trace).
+        // No-op when not streaming to a Vcd_user.
+        void *event_enable_now(vp::Trace *trace, bool enabled);
 
         static uint8_t *parse_event(uint8_t *buffer, bool &unlock);
         static uint8_t *parse_event_1(uint8_t *buffer, bool &unlock);

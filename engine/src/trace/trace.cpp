@@ -264,9 +264,18 @@ void vp::Trace::set_event_active(bool active, Event_file *file)
         {
             file->add_trace(this->full_path, this->id, this->width, this->type);
         }
+        // The enable is marked where the Vcd_user handle is allocated (TraceEngine::event_enable_now
+        // from the subscribe / start paths), not here: set_event_active(true) can run before the
+        // Vcd_user is even bound (filter-pinned traces at startup).
     }
     else
     {
+        // Mark the trace disabled: opens a disabled period so the GUI renders it as a gap instead of
+        // holding the last value (see vp::Event::enable_set). Sent directly rather than buffered.
+        if (this->comp)
+        {
+            this->comp->traces.get_trace_engine()->event_enable_now(this, false);
+        }
         this->dump_callback = NULL;
     }
 
@@ -510,6 +519,35 @@ uint8_t *vp::TraceEngine::parse_event(uint8_t *buffer, bool &unlock)
 {
     // TODO
     return buffer;
+}
+
+void *vp::TraceEngine::event_enable_now(vp::Trace *trace, bool enabled)
+{
+    // Mark a legacy vp::Trace enabled/disabled directly on the Vcd_user (e.g. the GUI), at the
+    // component's current time. On enable this also allocates/returns the streaming handle
+    // (trace->user_trace, threaded into event_update_*). No-op without a Vcd_user; file dumping has
+    // no concept of a disabled period. Nothing to disable if the trace was never registered.
+    if (!this->global_enable || this->vcd_user == NULL)
+        return NULL;
+    if (!enabled && trace->user_trace == NULL)
+        return NULL;
+
+    std::string clock_trace_name = "";
+    if (trace->comp && trace->comp->clock.get_engine())
+    {
+        clock_trace_name = trace->comp->clock.get_engine()->clock_trace.get_path();
+    }
+    int width = trace->type == gv::Vcd_event_type_real ? 8 :
+                trace->type == gv::Vcd_event_type_string ? 0 : trace->width;
+    int64_t timestamp = trace->comp ? trace->comp->time.get_time() : 0;
+
+    void *handle = this->vcd_user->event_enable(trace->get_full_path(), trace->type, width, "",
+        clock_trace_name, enabled, timestamp);
+    if (enabled)
+    {
+        trace->user_trace = handle;
+    }
+    return handle;
 }
 
 uint8_t *vp::TraceEngine::parse_event_real(uint8_t *buffer, bool &unlock)

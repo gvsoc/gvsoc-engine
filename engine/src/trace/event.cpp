@@ -372,6 +372,7 @@ uint8_t *vp::Event::parse_string(uint8_t *buffer, bool &unlock)
     return buffer + sizeof(event_string_t);
 }
 
+
 std::string vp::Event::path_get()
 {
     return this->parent.get_path() + "/" + std::string(this->name);
@@ -404,7 +405,13 @@ void vp::Event::enable_set(bool enabled, vp::Event_file *file)
         gv::Vcd_user *vcd_user = this->parent.traces.get_trace_engine()->vcd_user;
         if (vcd_user)
         {
-            this->external_trace = vcd_user->event_register(this->path_get(), this->type, this->width, this->description ? this->description : "", clock_trace_name);
+            // Register (allocate the handle) and mark the enable in one call. When enabling after
+            // time 0 the consumer closes the disabled period ending now ([0,T) on the first enable,
+            // [last-disable,T) on a re-enable), so the not-captured lead-in is blanked. Sent
+            // synchronously here, before the value replay below closes nothing further.
+            this->external_trace = vcd_user->event_enable(this->path_get(), this->type, this->width,
+                this->description ? this->description : "", clock_trace_name, true,
+                this->parent.time.get_time());
         }
         else if (file)
         {
@@ -485,6 +492,14 @@ void vp::Event::enable_set(bool enabled, vp::Event_file *file)
     }
     else
     {
+        // Mark the event disabled: opens a disabled period at the current time so the GUI renders it
+        // as a gap instead of holding the last value. Sent directly, not through the buffered event
+        // pipeline. clock unused on disable (the DbTrace already exists).
+        if (this->vcd_user && this->external_trace)
+        {
+            this->vcd_user->event_enable(this->path_get(), this->type, this->width,
+                this->description ? this->description : "", "", false, this->parent.time.get_time());
+        }
         this->dump_callback = NULL;
     }
 }
