@@ -43,6 +43,14 @@ class Signature:
     # string check. None means there is no legacy-string equivalent.
     tag = None
 
+    def label(self):
+        """Human-readable description of this interface, for tooling.
+
+        Used e.g. by the GUI model view to show a port's protocol next to its
+        name. Defaults to the legacy tag, falling back to the class name.
+        """
+        return self.tag or type(self).__name__
+
     def is_compatible(self, other):
         """Return True if a master with ``self`` can bind directly to a slave with ``other``.
 
@@ -84,6 +92,9 @@ class IoV2BigPacket(Signature):
     """
 
     tag = 'io_v2'
+
+    def label(self):
+        return 'io_v2 (big-packet)'
 
     def is_compatible(self, other):
         # Legacy 'io_v2' string slave is the historic big-packet default.
@@ -137,6 +148,9 @@ class IoV2Sync(Signature):
 
     tag = 'io_v2'
 
+    def label(self):
+        return 'io_v2 (sync)'
+
     def is_compatible(self, other):
         return isinstance(other, IoV2Sync)
 
@@ -169,6 +183,9 @@ class IoV2Beat(Signature):
 
     def __init__(self, beat_width):
         self.beat_width = beat_width
+
+    def label(self):
+        return f'io_v2 (beat, width={self.beat_width})'
 
     def is_compatible(self, other):
         return isinstance(other, IoV2Beat) and other.beat_width == self.beat_width

@@ -30,10 +30,12 @@ namespace vp {
  */
 struct TreeBinding
 {
-    const char *master_comp;    // "self" or child name
-    const char *master_port;    // Port name on master
-    const char *slave_comp;     // "self" or child name
-    const char *slave_port;     // Port name on slave
+    const char *master_comp;        // "self" or child name
+    const char *master_port;        // Port name on master
+    const char *slave_comp;         // "self" or child name
+    const char *slave_port;         // Port name on slave
+    const char *master_signature;   // Master-port signature label, or nullptr
+    const char *slave_signature;    // Slave-port signature label, or nullptr
 };
 
 /**

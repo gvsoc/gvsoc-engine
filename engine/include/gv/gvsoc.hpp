@@ -34,8 +34,9 @@ namespace gv {
      * v1 == trace declare/subscribe protocol (event_declare / event_subscribe).
      * v2 == ComponentTreeNode carries TreeMapping address maps (layout change).
      * v3 == Gvsoc::restart() added (a consumer calling it needs an engine providing it).
+     * v4 == TreeBinding carries master/slave signature labels (layout change).
      */
-    #define GV_API_VERSION 3
+    #define GV_API_VERSION 4
 
     /**
      * Return the GV_API_VERSION the engine was built with.
