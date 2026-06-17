@@ -23,6 +23,7 @@
 #define __VP_TRACE_block_trace_HPP__
 
 #include "vp/trace/trace.hpp"
+#include "vp/assert.hpp"
 
 using namespace std;
 
@@ -59,6 +60,30 @@ namespace vp
         void new_trace_event_real(std::string name, Trace *trace);
 
         inline TraceEngine *get_trace_engine();
+
+        /**
+         * @brief Assertion check reported through the block's trace.
+         *
+         * If the condition is false, the optional printf-style message is
+         * printed exactly like a trace line — with timestamp, cycle stamp and
+         * the owning block's instance path — and the simulation aborts.
+         *
+         * It is only active in the "asserts" and "debug" build variants (which
+         * define VP_ASSERT_ACTIVE). In every other variant it is an empty inline
+         * method, so the call has no cost (for side-effect-free conditions the
+         * optimizer removes it entirely).
+         *
+         *     this->traces.assert(idx < size, "idx=%d out of range %d", idx, size);
+         *     _this->traces.assert(cond);   // from a static handler
+         *
+         * @param cond Condition that must hold.
+         * @param fmt  Optional printf-style message describing the assertion.
+         */
+#ifdef VP_ASSERT_ACTIVE
+        void assert(bool cond, const char *fmt = "", ...);
+#else
+        inline void assert(bool, const char * = "", ...) {}
+#endif
 
         std::map<std::string, Trace *> traces;
         std::map<std::string, Trace *> trace_events;

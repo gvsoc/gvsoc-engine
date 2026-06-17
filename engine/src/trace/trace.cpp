@@ -42,6 +42,19 @@ void vp::BlockTrace::reg_trace(Trace *trace, int event)
     this->get_trace_engine()->reg_trace(trace, event, top.get_path(), trace->get_name());
 }
 
+#ifdef VP_ASSERT_ACTIVE
+void vp::BlockTrace::assert(bool cond, const char *fmt, ...)
+{
+    if (!cond)
+    {
+        va_list ap;
+        va_start(ap, fmt);
+        this->top.get_trace()->assert_fail(fmt, ap);
+        va_end(ap);
+    }
+}
+#endif
+
 void vp::BlockTrace::new_trace(std::string name, Trace *trace, TraceLevel level)
 {
     traces[name] = trace;
@@ -197,6 +210,22 @@ void vp::Trace::dump_warning_header()
 void vp::Trace::dump_fatal_header()
 {
     fprintf(this->trace_file, "[\033[31m%s\033[0m] ", path.c_str());
+}
+
+void vp::Trace::assert_fail(const char *fmt, va_list ap)
+{
+    // Emit the failure as a regular trace line (timestamp, cycle stamp and
+    // component path) so it is clear which instance triggered the assertion.
+    this->dump_header();
+    fprintf(this->trace_file, "\033[31massertion failed\033[0m");
+    if (fmt != NULL && fmt[0] != '\0')
+    {
+        fprintf(this->trace_file, ": ");
+        if (vfprintf(this->trace_file, fmt, ap) < 0) {}
+    }
+    fprintf(this->trace_file, "\n");
+    fflush(this->trace_file);
+    abort();
 }
 
 void vp::Trace::set_active(bool active)

@@ -13,6 +13,7 @@ For guidance on model development, please refer to the developer documentation.
    :caption: Contents:
 
    usage
+   execution_modes
    commands
    customization
    gdb_server

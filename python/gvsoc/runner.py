@@ -108,8 +108,11 @@ if os.environ.get('USE_GVRUN') is None:
             len(gvsoc_config.get('events/include_regex')) != 0 or \
             args.gui or args.power
 
+        asserts_mode = args.asserts_mode or gvsoc_config.get_bool('asserts-mode')
+
         gvsoc_config.set("debug-mode", debug_mode)
         gvsoc_config.set("profile-mode", profile_mode)
+        gvsoc_config.set("asserts-mode", asserts_mode)
 
         if debug_mode:
             debug_binaries = []
@@ -205,10 +208,12 @@ if os.environ.get('USE_GVRUN') is None:
                         "verbose": True,
                         "debug-mode": False,
                         "profile-mode": False,
+                        "asserts-mode": False,
 
                         "launchers": {
                             "default": "gvsoc_launcher",
-                            "debug": "gvsoc_launcher_debug"
+                            "debug": "gvsoc_launcher_debug",
+                            "asserts": "gvsoc_launcher_asserts"
                         },
 
                         "traces": {
@@ -588,6 +593,8 @@ if os.environ.get('USE_GVRUN') is None:
                     else:
                         if gvsoc_config.get_bool("debug-mode"):
                             launcher = gvsoc_config.get_str('launchers/debug')
+                        elif gvsoc_config.get_bool("asserts-mode"):
+                            launcher = gvsoc_config.get_str('launchers/asserts')
                         else:
                             launcher = gvsoc_config.get_str('launchers/default')
 
@@ -815,6 +822,9 @@ if os.environ.get('USE_GVRUN') is None:
                 parser.add_argument("--profile-mode", dest="profile_mode", action="store_true",
                         help="Launch in profile-mode (for events)")
 
+                parser.add_argument("--asserts-mode", dest="asserts_mode", action="store_true",
+                        help="Launch in asserts-mode (optimized build with assertions enabled)")
+
                 parser.add_argument("--gtkw", dest="gtkw", action="store_true",
                                     help="Generate GTKwave script")
 
@@ -1021,8 +1031,11 @@ else:
                 len(gvsoc_config.get('events/include_regex')) != 0 or \
                 args.gui or args.power
 
+            asserts_mode = args.asserts_mode or gvsoc_config.get_bool('asserts-mode')
+
             gvsoc_config.set("debug-mode", debug_mode)
             gvsoc_config.set("profile-mode", profile_mode)
+            gvsoc_config.set("asserts-mode", asserts_mode)
 
             # if debug_mode:
             #     debug_binaries = []
@@ -1121,10 +1134,12 @@ else:
                             "verbose": True,
                             "debug-mode": False,
                             "profile-mode": False,
+                            "asserts-mode": False,
 
                             "launchers": {
                                 "default": "gvsoc_launcher",
-                                "debug": "gvsoc_launcher_debug"
+                                "debug": "gvsoc_launcher_debug",
+                                "asserts": "gvsoc_launcher_asserts"
                             },
 
                             "traces": {
@@ -1416,6 +1431,8 @@ else:
                         else:
                             if gvsoc_config.get_bool("debug-mode"):
                                 launcher = gvsoc_config.get_str('launchers/debug')
+                            elif gvsoc_config.get_bool("asserts-mode"):
+                                launcher = gvsoc_config.get_str('launchers/asserts')
                             else:
                                 launcher = gvsoc_config.get_str('launchers/default')
 
@@ -1636,6 +1653,9 @@ else:
 
                     parser.add_argument("--profile-mode", dest="profile_mode", action="store_true",
                             help="Launch in profile-mode (for events)")
+
+                    parser.add_argument("--asserts-mode", dest="asserts_mode", action="store_true",
+                            help="Launch in asserts-mode (optimized build with assertions enabled)")
 
                     parser.add_argument("--gtkw", dest="gtkw", action="store_true",
                                         help="Generate GTKwave script")

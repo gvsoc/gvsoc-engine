@@ -198,6 +198,7 @@ class Trace {
     void force_warning_no_error(const char *fmt, ...);
     void force_warning_no_error(warning_type_e type, const char *fmt, ...);
     inline void fatal(const char *fmt, ...);
+    void assert_fail(const char *fmt, va_list ap);
 
     inline void event_highz(int64_t cycle_delay = 0, int64_t time_delay = 0);
     inline void event(uint8_t *value, int64_t cycle_delay = 0, int64_t time_delay = 0);
