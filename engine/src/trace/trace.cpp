@@ -22,6 +22,7 @@
 #include "vp/vp.hpp"
 #include "vp/trace/trace.hpp"
 #include "vp/trace/trace_engine.hpp"
+#include "vp/register.hpp"
 #include <string.h>
 #include <inttypes.h>
 
@@ -550,6 +551,36 @@ uint8_t *vp::TraceEngine::parse_event(uint8_t *buffer, bool &unlock)
     return buffer;
 }
 
+std::string vp::TraceEngine::regfields_to_json(vp::Trace *trace)
+{
+    if (trace->regfields == NULL || trace->regfields->size() == 0)
+        return "";
+
+    std::string result = "{\"fields\":[";
+    bool first = true;
+    for (vp::regfield *field: *trace->regfields)
+    {
+        if (!first)
+            result += ",";
+        first = false;
+
+        // Escape the field name (regfield names are plain identifiers in
+        // practice, but stay safe against quotes/backslashes in the JSON).
+        std::string name;
+        for (char c: field->name)
+        {
+            if (c == '"' || c == '\\')
+                name += '\\';
+            name += c;
+        }
+
+        result += "{\"n\":\"" + name + "\",\"b\":" + std::to_string(field->bit) +
+            ",\"w\":" + std::to_string(field->width) + "}";
+    }
+    result += "]}";
+    return result;
+}
+
 void *vp::TraceEngine::event_enable_now(vp::Trace *trace, bool enabled)
 {
     // Mark a legacy vp::Trace enabled/disabled directly on the Vcd_user (e.g. the GUI), at the
@@ -570,7 +601,8 @@ void *vp::TraceEngine::event_enable_now(vp::Trace *trace, bool enabled)
                 trace->type == gv::Vcd_event_type_string ? 0 : trace->width;
     int64_t timestamp = trace->comp ? trace->comp->time.get_time() : 0;
 
-    void *handle = this->vcd_user->event_enable(trace->get_full_path(), trace->type, width, "",
+    void *handle = this->vcd_user->event_enable(trace->get_full_path(), trace->type, width,
+        vp::TraceEngine::regfields_to_json(trace),
         clock_trace_name, enabled, timestamp);
     if (enabled)
     {

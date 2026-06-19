@@ -207,6 +207,8 @@ void vp::reg::init(vp::Block *top, std::string name, int bits, uint8_t *value, u
         memcpy((void *)this->reset_value_bytes, (void *)reset_value, this->nb_bytes);
     top->traces.new_trace(name + "/trace", &this->trace, vp::TRACE);
     top->traces.new_trace_event(name, &this->reg_event, bits);
+    // See RegisterCommon ctor: stable pointer, serialized lazily at enable time.
+    this->reg_event.regfields = &this->regfields;
 }
 
 void vp::reg::reset(bool active)
@@ -315,6 +317,10 @@ vp::RegisterCommon::RegisterCommon(Block &parent, std::string name, int width, b
     this->nb_bytes = (width + 7) / 8;
     parent.traces.new_trace(name + "/trace", &this->trace, vp::TRACE);
     parent.traces.new_trace_event(name, &this->reg_event, width);
+    // Hand the register event a stable pointer to our field layout. The vector
+    // is still empty here (the generated derived ctor fills it after us); it is
+    // serialized lazily when the trace is enabled/declared.
+    this->reg_event.regfields = &this->regfields;
 }
 
 

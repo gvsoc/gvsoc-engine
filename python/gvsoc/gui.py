@@ -156,7 +156,8 @@ class SignalGenThreads(object):
 class Signal(object):
 
     def __init__(self, comp, parent, name=None, path=None, is_group=False, groups=None, display=None, properties=None,
-                 skip_if_no_child=False, required_traces=None, include_traces=None, opened=False):
+                 skip_if_no_child=False, required_traces=None, include_traces=None, opened=False,
+                 expand_fields=False):
         if path is not None and comp is not None and len(path) != 0 and path[0] != '/':
             comp_path = get_comp_path(comp, inc_top=True)
             if comp_path is not None:
@@ -183,6 +184,9 @@ class Signal(object):
         if parent is not None:
             parent.child_signals.append(self)
         self.opened = opened
+        # When this is a regmap group, auto-expand each imported register into
+        # its named bit-field rows in the timeline.
+        self.expand_fields = expand_fields
         self.required_traces = required_traces
         self.include_traces = []
         if path is not None:
@@ -238,6 +242,8 @@ class Signal(object):
                 config['group'] = self.path
             else:
                 config['group'] = get_comp_path(self.comp, inc_top=True)
+            if self.expand_fields:
+                config['expand_fields'] = True
         if self.path is not None:
             config['path'] = self.path
         if self.display is not None:

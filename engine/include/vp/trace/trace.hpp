@@ -33,6 +33,7 @@ namespace vp {
 	class TraceEngine;
 	class Trace;
 	class Event;
+	class regfield;
 
 	using TraceParseCallback = uint8_t *(*)(uint8_t *buffer, bool &unlock);
     using TraceDumpCallback = void (*)(vp::TraceEngine*, vp::Trace*, int64_t, int64_t, uint8_t*, uint8_t*);
@@ -240,6 +241,13 @@ class Trace {
     // Same role as vp::Event::subscriber_count — refcount of live
     // gv::Vcd::event_subscribe() callers matching this legacy trace's path.
     int subscriber_count = 0;
+    // Borrowed pointer to the owning register's bit-field layout
+    // (name/bit/width), or nullptr for a non-register trace. Set when the
+    // register is constructed; the vector itself is filled later by the
+    // generated register ctor, so it must only be read lazily (at enable /
+    // declare time), never at trace-creation time. Serialized to the GUI as
+    // JSON in the trace description so the timeline can show field rows.
+    std::vector<vp::regfield *> *regfields = nullptr;
 
   protected:
     int level;

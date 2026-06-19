@@ -564,7 +564,8 @@ void vp::TraceEngine::start()
                             trace->type == gv::Vcd_event_type_string ? 0 :
                             trace->width;
                 this->vcd_user->event_declare(trace->get_full_path(),
-                    trace->type, width, "", clock_trace_name);
+                    trace->type, width, vp::TraceEngine::regfields_to_json(trace),
+                    clock_trace_name);
                 // Filter-pinned legacy vp::Trace: set_event_active(true, file)
                 // already ran (in check_trace_active). Wire it up to vcd_user
                 // so streamed values reach the GUI in addition to the file.
