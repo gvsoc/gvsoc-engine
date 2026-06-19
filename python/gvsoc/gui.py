@@ -49,6 +49,63 @@ class DisplayLogicBox(object):
     def get(self):
         return { 'type': 'logic_box', 'message': self.message }
 
+# A small subset of the X11/GTKWave colour names that were used by the old
+# gen_gtkw() map_files, mapped to 0xAARRGGBB so DisplayStateBox can accept them
+# for drop-in parity. Any other colour can be passed directly as an int.
+_STATE_COLORS = {
+    'black':     0xFF000000,
+    'white':     0xFFFFFFFF,
+    'red':       0xFFFF0000,
+    'green':     0xFF008000,
+    'blue':      0xFF0000FF,
+    'yellow':    0xFFFFFF00,
+    'orange':    0xFFFFA500,
+    'cyan':      0xFF00FFFF,
+    'magenta':   0xFFFF00FF,
+    'gray':      0xFF808080,
+    'grey':      0xFF808080,
+    'cadetblue': 0xFF5F9EA0,
+}
+
+class DisplayStateBox(object):
+    """Render an integer state signal as named, coloured boxes.
+
+    This is the GUI equivalent of the old gen_gtkw() `map_file`: each integer
+    value is mapped to a human-readable label and (optionally) a colour, so an
+    FSM-state signal shows e.g. `IDLE`/`MATRIXVEC`/`END` instead of a raw hex
+    value. Unmapped values fall back to plain hex/dec formatting.
+
+    labels : dict mapping ``int_value`` to either ``name``, ``(name, color)`` or
+             ``None``. ``color`` may be a 0xAARRGGBB int or an X11/GTKWave colour
+             name. ``None`` renders that value as a high-Z (inactive) line
+             instead of a box -- handy for an IDLE state so only active states
+             draw a labelled box.
+    format : fallback formatting ("hex" or "int") for unmapped values.
+    """
+
+    def __init__(self, labels, format="hex"):
+        self.labels = labels
+        self.format = format
+
+    def get(self):
+        out = []
+        for value, spec in self.labels.items():
+            if spec is None:
+                # High-Z: no label, rendered as an inactive line.
+                out.append({ 'v': int(value), 'highz': True })
+                continue
+            if isinstance(spec, (tuple, list)):
+                name, color = spec
+            else:
+                name, color = spec, None
+            entry = { 'v': int(value), 'l': name }
+            if color is not None:
+                if isinstance(color, str):
+                    color = _STATE_COLORS[color.lower()]
+                entry['c'] = int(color)
+            out.append(entry)
+        return { 'type': 'state_box', 'format': self.format, 'labels': out }
+
 def get_comp_path(comp, inc_top=False, child_path=None):
     if os.environ.get('USE_GVRUN2') is not None:
         return '/' + comp.get_path(child_path=child_path)
