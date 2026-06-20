@@ -427,8 +427,7 @@ void gv::GvProxySession::proxy_loop()
                     int clock_idx = strtol(words[1].c_str(), NULL, 0);
                     int64_t count = strtoll(words[2].c_str(), NULL, 0);
                     auto &clocks = engine->get_clock_engines();
-                    bool can_step = clock_idx >= 0 && clock_idx < (int)clocks.size()
-                        && count > 0 && clocks[clock_idx]->get_period() > 0;
+                    bool can_step = clock_idx >= 0 && clock_idx < (int)clocks.size() && count > 0;
                     if (can_step)
                     {
                         // Step exactly `count` cycles of the selected clock domain via a clock event
@@ -436,14 +435,18 @@ void gv::GvProxySession::proxy_loop()
                         // through GvProxy::step_end by matching this session pointer, the same
                         // mechanism the "step" command uses. The session client is always a
                         // ControllerClient (created by gvsoc_new in this session's constructor).
+                        //
+                        // A clock-gated domain (period 0) is handled too: the clock event is parked in
+                        // the domain's queue and stays pending until another domain gives this clock a
+                        // frequency (apply_frequency_handler re-enqueues it), at which point it ticks
+                        // the requested cycles and the reply is sent. The step does not return early.
                         this->step_req = req;
                         static_cast<gv::ControllerClient *>(this->gvsoc)->step_cycles(
                             clock_idx, count, false, (void *)this);
                     }
                     else
                     {
-                        // Invalid index, non-positive count, or a gated clock (period 0): nothing to
-                        // advance, reply immediately with the current time.
+                        // Invalid index or non-positive count: nothing to do, reply immediately.
                         std::unique_lock<std::mutex> lock(this->proxy->mutex);
                         dprintf(reply_fd, "req=%s;msg=%ld\n", req.c_str(), engine->get_time());
                         lock.unlock();

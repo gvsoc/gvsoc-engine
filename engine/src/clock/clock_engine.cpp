@@ -667,6 +667,10 @@ void vp::ClockEngine::step_cycles(int64_t count, step_cycles_callback_t callback
 void vp::ClockEngine::step_cycles_handler(vp::Block *__this, vp::ClockEvent *event)
 {
     vp::ClockEngine *_this = (vp::ClockEngine *)__this;
+    // Refresh the cycle-count trace at the exact stop cycle. The trace is otherwise only dumped at
+    // exec() entry, and the engine can advance many cycles per exec, so without this the GUI would
+    // show a stale (lagging) cycle count after a cycle-step until the next exec refreshes it.
+    _this->cycles_trace.event_real(_this->cycles);
     _this->time_engine->pause();
     if (_this->step_cycles_callback)
     {
