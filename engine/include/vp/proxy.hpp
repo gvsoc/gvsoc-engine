@@ -36,9 +36,11 @@ public:
     void wait();
     // Write a raw notification line to this session's reply stream. Caller must hold proxy->mutex.
     void notify(const std::string &msg);
-    // Send the reply for a completed asynchronous step. Called by the controller via
-    // GvProxy::step_end with this session as the step data.
-    void send_step_reply();
+    // Send the reply for a finished asynchronous step. Called by the controller via
+    // GvProxy::step_end with this session as the step data. When `reason` is non-empty the step
+    // was interrupted before completion (e.g. simulation stopped); the reply then carries a
+    // `step_stopped=<reason>` field so the front-end can explain why.
+    void send_step_reply(const std::string &reason = "");
 
 private:
     void proxy_loop();
@@ -70,7 +72,7 @@ public:
     void notify_running();
     void notify_stopped();
     void notify_syscall_stop();
-    void step_end(void *data);
+    void step_end(void *data, const std::string &reason = "");
     // Shut the proxy down: stop accepting connections and force any session blocked reading its
     // socket to return so its thread exits. Must be called before process teardown — a thread
     // blocked in fgets() holds the FILE lock, which deadlocks the stdio cleanup run by exit().

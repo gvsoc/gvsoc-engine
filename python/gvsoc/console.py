@@ -308,7 +308,10 @@ class GvsocConsole(cmd.Cmd):
             print(f"Error: clock domain '{self.clock_domain}' not found")
             return
 
-        # Use true cycle-based stepping
+        # Use true cycle-based stepping. Clear the interrupted-step reason first; the reader sets it
+        # only if the engine reports the step was stopped before completing (e.g. toolbar stop, or
+        # later a breakpoint).
+        self.proxy.reader.step_stop_reason = None
         reply = self.proxy.step_cycles(clock_idx, count)
         try:
             timestamp = int(reply.strip())
@@ -319,7 +322,12 @@ class GvsocConsole(cmd.Cmd):
         self._display_new_traces()
         self._update_prompt()
         time_str = format_time(timestamp) if timestamp is not None else "unknown"
-        print(f"Stepped {count} cycle(s). Time: {time_str}")
+        stop_reason = self.proxy.reader.step_stop_reason
+        if stop_reason:
+            print(f"Step interrupted ({stop_reason}) before completing {count} cycle(s). "
+                f"Time: {time_str}")
+        else:
+            print(f"Stepped {count} cycle(s). Time: {time_str}")
         self._check_breakpoint_hit()
 
     def do_stop(self, arg):

@@ -652,15 +652,30 @@ std::string vp::ClockEngine::handle_command(gv::GvProxy *proxy, FILE *req_file, 
 }
 
 
-void vp::ClockEngine::step_cycles(int64_t count, step_cycles_callback_t callback, void *callback_arg)
+vp::ClockEvent *vp::ClockEngine::step_cycles(int64_t count, step_cycles_callback_t callback,
+    void *callback_arg)
 {
-    if (this->step_cycles_event == nullptr)
+    // One event per outstanding cycle-step, so several steps (e.g. from independent clients) can be
+    // pending on this domain at once without clobbering each other. The event carries its own
+    // callback + argument and is freed when it fires (step_cycles_handler) or is canceled
+    // (cancel_step_cycles).
+    vp::ClockEvent *event = this->event_new(&ClockEngine::step_cycles_handler);
+    event->get_args()[0] = (void *)callback;
+    event->get_args()[1] = callback_arg;
+    event->enqueue(count);
+    return event;
+}
+
+
+void vp::ClockEngine::cancel_step_cycles(vp::ClockEvent *event)
+{
+    if (event == nullptr)
     {
-        this->step_cycles_event = this->event_new(&ClockEngine::step_cycles_handler);
+        return;
     }
-    this->step_cycles_callback = callback;
-    this->step_cycles_callback_arg = callback_arg;
-    this->step_cycles_event->enqueue(count);
+    event->cancel();
+    // The event destructor unregisters it from this block's clock-event list.
+    delete event;
 }
 
 
@@ -672,9 +687,16 @@ void vp::ClockEngine::step_cycles_handler(vp::Block *__this, vp::ClockEvent *eve
     // show a stale (lagging) cycle count after a cycle-step until the next exec refreshes it.
     _this->cycles_trace.event_real(_this->cycles);
     _this->time_engine->pause();
-    if (_this->step_cycles_callback)
+
+    step_cycles_callback_t callback = (step_cycles_callback_t)event->get_args()[0];
+    void *callback_arg = event->get_args()[1];
+
+    // The event is one-shot: free it now (safe here — the clock exec loop saves the next event
+    // before invoking this callback, so it does not touch `event` afterwards).
+    delete event;
+
+    if (callback)
     {
-        _this->step_cycles_callback(_this->step_cycles_callback_arg);
-        _this->step_cycles_callback = nullptr;
+        callback(callback_arg);
     }
 }

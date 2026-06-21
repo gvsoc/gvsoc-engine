@@ -43,6 +43,10 @@ namespace gv {
         Controller *controller;
         ControllerClient *client;
         void *request;
+        // Clock domain the step event is enqueued in, and the event itself, so the step can be
+        // canceled on abort. `event` is owned by the clock engine and freed when it fires.
+        vp::ClockEngine *clock;
+        vp::ClockEvent *event;
     };
 
     class Logger
@@ -180,6 +184,13 @@ namespace gv {
         // Static handler invoked by ClockEngine::step_cycles when the requested cycle count is
         // reached. Mirrors step_async_handler: stops the client and routes the step-end reply.
         static void step_cycles_async_handler(void *arg);
+        // Interrupt the cycle-step outstanding for `client`, if any (the requested count was not
+        // reached): cancel its clock event and route an aborted step-end reply carrying `reason`,
+        // so a front-end blocked on the step unblocks and can explain why it stopped. No-op if the
+        // client has no step pending. Called when a client is stopped with a step outstanding (e.g.
+        // toolbar stop); a global stop such as a breakpoint would call this for every client. Must
+        // be called with the engine locked/halted (the clock event is canceled).
+        void abort_step_cycles(ControllerClient *client, const std::string &reason);
         // Allocate and setup the preallocated synchronous step event of a client.
         // Used when the client registers and again on restart, since step events are
         // attached to the step block of the current system.
@@ -315,6 +326,11 @@ namespace gv {
         gv::Gvsoc_user *user = NULL;
         // Step event used to stop engine when stepping in synchronous mode
         vp::TimeEvent *step_event = NULL;
+        // Cycle-step this client currently has outstanding, or nullptr. At most one per client
+        // (the client blocks on the reply before issuing another); different clients can each have
+        // one on their own clock domain. Set by step_cycles_async, cleared on normal completion
+        // (step_cycles_async_handler) or interruption (abort_step_cycles). Under the engine mutex.
+        StepCyclesReq *step_cycles_pending = nullptr;
     };
 
 };

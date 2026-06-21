@@ -52,6 +52,10 @@ class Proxy(object):
             # incrementing sequence so the console can detect re-selection of the same domain.
             self.active_clock = None
             self.active_clock_seq = 0
+            # Reason reported by the engine when the last cycle-step was interrupted before
+            # completion (e.g. simulation stopped). None when the step completed normally. The
+            # caller (e.g. console stepc) resets this before stepping and reads it afterwards.
+            self.step_stop_reason = None
 
         def __quit(self, status):
             self.lock.acquire()
@@ -91,6 +95,7 @@ class Proxy(object):
                 msg = ""
                 err = None
                 err_msg = None
+                step_stop_reason = None
 
                 for arg in reply.split(';'):
                     name, value = arg.split('=', 1)
@@ -118,6 +123,11 @@ class Proxy(object):
 
                     elif name == 'err_msg':
                         err_msg = value
+
+                    elif name == 'step_stopped':
+                        # A cycle-step reply whose step was interrupted before completion; carries
+                        # the reason (e.g. "simulation stopped").
+                        step_stop_reason = value
 
                     elif name == 'payload':
                         callback = self.matches.get('%s' % req)
@@ -147,6 +157,11 @@ class Proxy(object):
                     self.running = False
                 elif is_run is not None:
                     self.running = True
+
+                # Only set on an interrupted-step reply; leave it untouched otherwise so an
+                # unrelated notification arriving before the caller reads it does not clear it.
+                if step_stop_reason is not None:
+                    self.step_stop_reason = step_stop_reason
 
                 self.replies[req] = msg
                 self.condition.notify_all()

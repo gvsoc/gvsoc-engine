@@ -524,6 +524,11 @@ int64_t gv::Controller::stop(ControllerClient *client)
 {
     this->client_stop(client);
 
+    // If this client had a cycle-step outstanding, interrupt it so its front-end unblocks instead
+    // of staying stuck until the (now never-reached) target cycle. This method runs with the engine
+    // locked/halted, so canceling the pending clock event here is safe.
+    this->abort_step_cycles(client, "simulation stopped");
+
     // Since this method must be called with the engine locked, we are sure it is already stopped
     // thus we can safely return the current time as the time where it was stopped.
     return this->handler->get_time_engine()->get_time();
@@ -544,14 +549,19 @@ void gv::Controller::step_cycles_async(int clock_id, int64_t count, ControllerCl
 {
     vp::ClockEngine *clock = this->handler->get_time_engine()->get_clock_engines()[clock_id];
 
-    // Carry the controller/client/request into the C-style clock callback. Freed in the handler.
-    StepCyclesReq *req = new StepCyclesReq{ this, client, request };
+    // Carry the controller/client/request/clock into the C-style clock callback. Freed in the
+    // handler. The backing event is filled in just below.
+    StepCyclesReq *req = new StepCyclesReq{ this, client, request, clock, nullptr };
 
     // Enqueue a delayed clock event at current_cycle + count in the domain itself. Its handler
     // pauses the engine on a clean cycle boundary (end of the timestamp) and invokes our callback.
-    // Note: ClockEngine has a single step event/callback slot, so only one outstanding cycle-step
-    // per domain is supported; stepping is one-at-a-time (the client blocks on the reply).
-    clock->step_cycles(count, &Controller::step_cycles_async_handler, (void *)req);
+    // The clock engine allocates one event per step, so several clients can have a cycle-step
+    // outstanding on the same domain at once.
+    req->event = clock->step_cycles(count, &Controller::step_cycles_async_handler, (void *)req);
+
+    // Remember the outstanding step on the client so it can be interrupted if the client is stopped
+    // before the target cycle is reached (see abort_step_cycles).
+    client->step_cycles_pending = req;
 
     this->client_run(client);
 
@@ -572,6 +582,11 @@ void gv::Controller::step_cycles_async_handler(void *arg)
     ControllerClient *client = req->client;
     void *request = req->request;
     _this->logger.info("Step cycles handler\n");
+
+    // The step reached its target: it is no longer outstanding, so a concurrent stop must not also
+    // try to abort it.
+    client->step_cycles_pending = nullptr;
+
     _this->client_stop(client);
 
     for (gv::ControllerClient *c: _this->clients)
@@ -587,6 +602,43 @@ void gv::Controller::step_cycles_async_handler(void *arg)
     if (_this->proxy)
     {
         _this->proxy->step_end(request);
+    }
+
+    delete req;
+}
+
+void gv::Controller::abort_step_cycles(ControllerClient *client, const std::string &reason)
+{
+    StepCyclesReq *req = client->step_cycles_pending;
+    if (req == nullptr)
+    {
+        return;
+    }
+    client->step_cycles_pending = nullptr;
+
+    this->logger.info("Aborting step cycles (client: %s, reason: %s)\n", client->name.c_str(),
+        reason.c_str());
+
+    // Cancel this step's own event so it does not fire (and send a second, spurious reply) when the
+    // engine is later resumed. Other clients' steps on the same domain have their own events and are
+    // left untouched.
+    req->clock->cancel_step_cycles(req->event);
+
+    void *request = req->request;
+
+    for (gv::ControllerClient *c: this->clients)
+    {
+        if (c->user)
+        {
+            c->user->handle_step_end(request);
+        }
+    }
+
+    // Route the interrupted step-end reply to the issuing proxy session, carrying the reason so the
+    // front-end can explain why the step did not complete. Same routing as the normal step-end.
+    if (this->proxy)
+    {
+        this->proxy->step_end(request, reason);
     }
 
     delete req;

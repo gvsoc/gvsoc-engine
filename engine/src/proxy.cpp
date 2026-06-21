@@ -192,15 +192,26 @@ void gv::GvProxySession::notify(const std::string &msg)
     dprintf(this->reply_fd, "%s", msg.c_str());
 }
 
-void gv::GvProxySession::send_step_reply()
+void gv::GvProxySession::send_step_reply(const std::string &reason)
 {
     // Caller must hold proxy->mutex. Flush trace output so it is available before the reply.
     fflush(stdout);
-    dprintf(this->reply_fd, "req=%s;msg=%ld\n", this->step_req.c_str(),
-        gv::Controller::get().top_get()->get_time_engine()->get_time());
+    int64_t time = gv::Controller::get().top_get()->get_time_engine()->get_time();
+    if (reason.empty())
+    {
+        dprintf(this->reply_fd, "req=%s;msg=%ld\n", this->step_req.c_str(), time);
+    }
+    else
+    {
+        // Step interrupted before completion: append the reason so the front-end can report why.
+        // `reason` is engine-controlled plain text (no ';'/'=') so it does not break the
+        // key=value;... reply framing the clients parse.
+        dprintf(this->reply_fd, "req=%s;msg=%ld;step_stopped=%s\n", this->step_req.c_str(), time,
+            reason.c_str());
+    }
 }
 
-void gv::GvProxy::step_end(void *data)
+void gv::GvProxy::step_end(void *data, const std::string &reason)
 {
     // The step data is the issuing session (set by the session's step command). Match it against
     // our live sessions before using it, so a step issued by a non-proxy client (whose data is
@@ -210,7 +221,7 @@ void gv::GvProxy::step_end(void *data)
     {
         if ((void *)session == data)
         {
-            session->send_step_reply();
+            session->send_step_reply(reason);
             return;
         }
     }
