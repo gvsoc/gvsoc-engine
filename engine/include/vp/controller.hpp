@@ -135,6 +135,17 @@ namespace gv {
         // Can be called to handle a semi-hosting stop
         void syscall_stop_handle();
 
+        // Register an ELF binary a model has gained access to (statically at reset, or dynamically at
+        // run time e.g. via semi-hosting). The path is accumulated in the engine and connected proxy
+        // clients are notified that the binary set changed so they can re-query get_binaries() and
+        // (e.g. the console) auto-load symbols. Model code must reach this through the component
+        // (comp->get_launcher()) rather than Controller::get(): the latter's inline singleton
+        // resolves to a separate per-.so instance.
+        void declare_binary(const std::string &path);
+        // The ELF binaries registered so far (snapshot copy). Queried by proxy clients via the
+        // get_binaries proxy command.
+        std::vector<std::string> get_binaries();
+
         double get_instant_power(double &dynamic_power, double &static_power, ControllerClient *client);
         double get_average_power(double &dynamic_power, double &static_power, ControllerClient *client);
         void report_start(ControllerClient *client);
@@ -227,6 +238,10 @@ namespace gv {
         vp::Component *instance;
         // Proxy
         GvProxy *proxy;
+        // ELF binaries registered by models via declare_binary; the authoritative list returned to
+        // proxy clients by get_binaries(). Accumulated here (not in the proxy) so it survives the
+        // proxy not yet existing at declaration time and covers binaries added during execution.
+        std::vector<std::string> declared_binaries;
         // When a proxy is enabled, tells whether start() must block until a client connects. True
         // for a config-enabled (standalone) proxy; false for an in-process host (the GUI) so the
         // engine can start without an attached console.

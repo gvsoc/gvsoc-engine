@@ -113,6 +113,30 @@ void gv::Controller::syscall_stop_handle()
     }
 }
 
+void gv::Controller::declare_binary(const std::string &path)
+{
+    // Accumulate the binary (de-duplicated). On a genuinely new one, tell connected proxy clients
+    // the set changed so they re-query get_binaries(); a client connecting later picks it up from
+    // that query instead. No-op beyond accumulation when no proxy is enabled.
+    for (auto &known: this->declared_binaries)
+    {
+        if (known == path)
+        {
+            return;
+        }
+    }
+    this->declared_binaries.push_back(path);
+    if (this->proxy)
+    {
+        this->proxy->notify_binaries_changed();
+    }
+}
+
+std::vector<std::string> gv::Controller::get_binaries()
+{
+    return this->declared_binaries;
+}
+
 void gv::Controller::init(gv::GvsocConf *conf)
 {
     if (!this->is_init)

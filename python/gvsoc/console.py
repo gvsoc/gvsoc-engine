@@ -145,6 +145,8 @@ class GvsocConsole(cmd.Cmd):
         self.iss_ptr = None  # cached ISS component pointer
         self.symbols = {}  # name -> addr
         self.sym_addrs = []  # sorted list of (addr, name) for reverse lookup
+        self._loaded_binaries = set()  # engine binaries already auto-loaded (see _sync_binaries)
+        self._applied_binaries_seq = 0  # last reader.binaries_changed_seq we reacted to
         self.trace_file = None  # path to trace output file
         self.trace_file_pos = 0  # current read position
         self.gui_embedded = False  # True when launched behind the GUI relay (sync clock selection)
@@ -169,6 +171,11 @@ class GvsocConsole(cmd.Cmd):
             print(f"Error: cannot connect to GVSoC proxy at {self.host}:{self.port} ({e})")
             sys.exit(1)
 
+        # Query the engine's registered binaries and load their symbols, so breakpoints by symbol
+        # name work out of the box without a manual `symbol load`. The query is a synchronous
+        # round-trip, so it is race-free even in script mode where the first command runs immediately.
+        self._sync_binaries()
+
         self._update_prompt()
 
     def postloop(self):
@@ -186,6 +193,7 @@ class GvsocConsole(cmd.Cmd):
     def precmd(self, line):
         """Drain notification queue and update prompt before each command."""
         self._drain_notifications()
+        self._sync_binaries_if_changed()
         self._sync_clock_from_gui()
         self._update_prompt()
         return line
@@ -221,6 +229,7 @@ class GvsocConsole(cmd.Cmd):
     def postcmd(self, stop, line):
         """Update prompt after each command."""
         self._drain_notifications()
+        self._sync_binaries_if_changed()
         self._update_prompt()
         return stop
 
@@ -1167,11 +1176,79 @@ class GvsocConsole(cmd.Cmd):
     # Symbol Table
     # ──────────────────────────────────────────────
 
+    def _load_symbols(self, path):
+        """Load ELF symbols from `path` into the console symbol table.
+
+        Returns (count, error_message); error_message is None on success.
+        """
+        path = os.path.expanduser(path)
+        if not os.path.isfile(path):
+            return None, f"file not found: {path}"
+        try:
+            from elftools.elf.elffile import ELFFile
+            from elftools.elf.sections import SymbolTableSection
+        except ImportError:
+            return None, "pyelftools not installed (pip install pyelftools)"
+        try:
+            with open(path, 'rb') as f:
+                elf = ELFFile(f)
+                count = 0
+                for section in elf.iter_sections():
+                    if isinstance(section, SymbolTableSection):
+                        for sym in section.iter_symbols():
+                            if sym.name and sym.entry['st_value'] != 0 and \
+                               sym.entry['st_info']['type'] in ('STT_FUNC', 'STT_OBJECT', 'STT_NOTYPE'):
+                                self.symbols[sym.name] = sym.entry['st_value']
+                                count += 1
+            # Build sorted address list for reverse lookup
+            self.sym_addrs = sorted(
+                [(addr, name) for name, addr in self.symbols.items()],
+                key=lambda x: x[0]
+            )
+            return count, None
+        except Exception as e:
+            return None, f"error reading ELF: {e}"
+
+    def _sync_binaries(self):
+        """Query the engine's registered binaries and auto-load symbols for any new ones.
+
+        Lets `break <symbol>` work without a manual `symbol load`. Pull-based: the engine accumulates
+        binaries (declared by models at reset or dynamically) and we fetch the list here. Already
+        loaded ones are skipped, so this is safe to call repeatedly.
+        """
+        reader = self.proxy.reader if self.proxy else None
+        if reader is not None:
+            # Record the change-counter we are about to satisfy, so a notification that arrives before
+            # this query is not re-handled needlessly.
+            self._applied_binaries_seq = reader.binaries_changed_seq
+        try:
+            binaries = self.proxy.get_binaries()
+        except Exception:
+            return
+        for path in binaries:
+            if path in self._loaded_binaries:
+                continue
+            self._loaded_binaries.add(path)
+            if not path or not os.path.isfile(os.path.expanduser(path)):
+                continue
+            count, err = self._load_symbols(path)
+            if not err:
+                print(f"Auto-loaded {count} symbols from {path}")
+
+    def _sync_binaries_if_changed(self):
+        """Re-sync binaries only when the engine has signalled a change (binaries_changed)."""
+        reader = self.proxy.reader if self.proxy else None
+        if reader is not None and reader.binaries_changed_seq != self._applied_binaries_seq:
+            self._sync_binaries()
+
     def _addr_to_symbol(self, addr):
         """Resolve an address to the nearest symbol name + offset."""
         if not self.sym_addrs:
             return None
-        idx = bisect.bisect_right(self.sym_addrs, (addr, '')) - 1
+        # Use a sentinel above any real name so every symbol *at* `addr` is included: with a
+        # ('', addr) low key, an exact match like (addr, 'main') sorts after (addr, '') and would
+        # be skipped, mislabelling the address as the previous symbol + offset.
+        idx = bisect.bisect_right(self.sym_addrs, (addr, '\U0010FFFF')) - 1
         if idx < 0:
             return None
         sym_addr, sym_name = self.sym_addrs[idx]
@@ -1216,35 +1293,11 @@ class GvsocConsole(cmd.Cmd):
             if not subarg:
                 print("Usage: symbol load <elf_path>")
                 return
-            path = os.path.expanduser(subarg)
-            if not os.path.isfile(path):
-                print(f"Error: file not found: {path}")
-                return
-            try:
-                from elftools.elf.elffile import ELFFile
-                from elftools.elf.sections import SymbolTableSection
-            except ImportError:
-                print("Error: pyelftools not installed (pip install pyelftools)")
-                return
-            try:
-                with open(path, 'rb') as f:
-                    elf = ELFFile(f)
-                    count = 0
-                    for section in elf.iter_sections():
-                        if isinstance(section, SymbolTableSection):
-                            for sym in section.iter_symbols():
-                                if sym.name and sym.entry['st_value'] != 0 and \
-                                   sym.entry['st_info']['type'] in ('STT_FUNC', 'STT_OBJECT', 'STT_NOTYPE'):
-                                    self.symbols[sym.name] = sym.entry['st_value']
-                                    count += 1
-                # Build sorted address list for reverse lookup
-                self.sym_addrs = sorted(
-                    [(addr, name) for name, addr in self.symbols.items()],
-                    key=lambda x: x[0]
-                )
-                print(f"Loaded {count} symbols from {path}")
-            except Exception as e:
-                print(f"Error reading ELF: {e}")
+            count, err = self._load_symbols(subarg)
+            if err:
+                print(f"Error: {err}")
+            else:
+                print(f"Loaded {count} symbols from {os.path.expanduser(subarg)}")
 
         elif subcmd == 'lookup':
             if not subarg:

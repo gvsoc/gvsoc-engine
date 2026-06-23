@@ -258,6 +258,17 @@ void gv::GvProxy::notify_syscall_stop()
     }
 }
 
+void gv::GvProxy::notify_binaries_changed()
+{
+    std::unique_lock<std::mutex> lock(this->mutex);
+    // Data-less "the binary set changed" signal; clients re-query with get_binaries. Uses the same
+    // req=-1;msg=... notification framing the clients already parse.
+    for (auto session: this->sessions)
+    {
+        session->notify("req=-1;msg=binaries_changed\n");
+    }
+}
+
 
 void gv::GvProxy::send_reply(std::string msg)
 {
@@ -526,6 +537,23 @@ void gv::GvProxySession::proxy_loop()
                             clock->get_path().c_str(), clock->get_period(),
                             clock->get_frequency(), clock->get_cycles());
                         result += buf;
+                    }
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=%s\n", req.c_str(), result.c_str());
+                    fflush(reply_sock);
+                    lock.unlock();
+                }
+                else if (words[0] == "get_binaries")
+                {
+                    // Return the engine's registered ELF binaries (pipe-separated) so a client can
+                    // auto-load their symbols. Authoritative list, kept by the controller as models
+                    // declare binaries (at reset or dynamically).
+                    std::string result;
+                    for (auto &binary : gv::Controller::get().get_binaries())
+                    {
+                        if (!result.empty())
+                            result += "|";
+                        result += binary;
                     }
                     std::unique_lock<std::mutex> lock(this->proxy->mutex);
                     fprintf(reply_sock, "req=%s;msg=%s\n", req.c_str(), result.c_str());

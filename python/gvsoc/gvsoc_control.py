@@ -52,6 +52,9 @@ class Proxy(object):
             # incrementing sequence so the console can detect re-selection of the same domain.
             self.active_clock = None
             self.active_clock_seq = 0
+            # Bumped on each "binaries_changed" notification from the engine (a model registered a new
+            # ELF binary). A front-end watches this and re-queries get_binaries() to auto-load symbols.
+            self.binaries_changed_seq = 0
             # Reason reported by the engine when the last cycle-step was interrupted before
             # completion (e.g. simulation stopped). None when the step completed normally. The
             # caller (e.g. console stepc) resets this before stepping and reads it afterwards.
@@ -117,6 +120,11 @@ class Proxy(object):
                             # up even when the same domain is re-selected.
                             self.active_clock = msg.split('=', 1)[1]
                             self.active_clock_seq += 1
+                        elif msg.find('binaries_changed') == 0:
+                            # The engine's set of registered ELF binaries changed (a model declared a
+                            # new one, possibly during execution). Signal the front-end to re-query the
+                            # list via get_binaries(). Counter bump is atomic under the GIL.
+                            self.binaries_changed_seq += 1
 
                     elif name == 'err':
                         err = value
@@ -451,6 +459,20 @@ class Proxy(object):
                     info[k] = int(v)
             domains.append(info)
         return domains
+
+
+    def get_binaries(self):
+        """Get the ELF binaries the engine has registered.
+
+        Returns a list of file paths. The set grows as models declare binaries
+        (at reset or dynamically); watch reader.binaries_changed_seq to know when
+        to call this again.
+        """
+        result = self._send_cmd('get_binaries')
+        result = result.replace('\n', '')
+        if not result:
+            return []
+        return [p for p in result.split('|') if p]
 
 
     def register_exit_callback(self, callback, *kargs, **kwargs):

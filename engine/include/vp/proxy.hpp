@@ -73,6 +73,11 @@ public:
     void notify_stopped();
     void notify_syscall_stop();
     void step_end(void *data, const std::string &reason = "");
+    // Tell every connected session that the engine's set of registered binaries changed, as a
+    // "req=-1;msg=binaries_changed" notification. It carries no data: a client re-queries the list
+    // with the get_binaries command. Used for binaries added while a client is already connected
+    // (e.g. via semi-hosting); clients connecting later get the current set from get_binaries.
+    void notify_binaries_changed();
     // Shut the proxy down: stop accepting connections and force any session blocked reading its
     // socket to return so its thread exits. Must be called before process teardown — a thread
     // blocked in fgets() holds the FILE lock, which deadlocks the stdio cleanup run by exit().
