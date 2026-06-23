@@ -101,6 +101,32 @@ class GvsocConsole(cmd.Cmd):
 
     intro = "GVSoC Interactive Console. Type 'help' for available commands.\n"
 
+    # Ordered command categories, mirroring the section dividers below. Each
+    # entry is (key, title, description, [command names]). The key is used by
+    # `help <category>` and is chosen to not collide with any command name.
+    HELP_CATEGORIES = [
+        ("control",   "Simulation control", "Run, step, stop and query the simulation",
+            ["run", "step", "stepc", "stop", "status", "quit", "terminate", "exit"]),
+        ("clock",     "Clock domains",      "List and select clock domains",
+            ["clock"]),
+        ("trace",     "Traces & events",    "Enable/disable traces and VCD events",
+            ["trace", "event"]),
+        ("memory",    "Memory access",      "Read and write memory via a router",
+            ["mem"]),
+        ("component", "Components",         "Send commands to platform components",
+            ["component"]),
+        ("debug",     "Breakpoints",        "Breakpoints, watchpoints and info",
+            ["break", "watch", "rwatch", "delete", "info"]),
+        ("registers", "CPU registers",      "Read CPU registers",
+            ["reg"]),
+        ("symbols",   "Symbol table",       "Load and resolve ELF symbols",
+            ["symbol"]),
+        ("settings",  "Settings",           "Configure router/iss/tracefile",
+            ["set"]),
+        ("script",    "Scripting",          "Run commands from a file",
+            ["script"]),
+    ]
+
     def __init__(self, host='localhost', port=42951):
         super().__init__()
         self.host = host
@@ -210,6 +236,78 @@ class GvsocConsole(cmd.Cmd):
     def do_exit(self, arg):
         """Exit the console."""
         return True
+
+    def _cmd_summary(self, name):
+        """Return the first non-blank line of a command's docstring."""
+        doc = getattr(self, 'do_' + name, None).__doc__ or ''
+        for line in doc.strip().splitlines():
+            line = line.strip()
+            if line:
+                return line
+        return ''
+
+    def _print_group(self, title, names, width):
+        """Print a category header followed by its commands and summaries.
+
+        `width` is the command-name column width, passed in so descriptions
+        align across every group, not just within one.
+        """
+        print(f"{title}:")
+        for name in names:
+            print(f"  {name.ljust(width)}  {self._cmd_summary(name)}")
+
+    def do_help(self, arg):
+        """Show grouped help, a single category, or one command's details.
+
+        Usage: help [command|category]
+          help            - list all commands grouped by category
+          help <category> - list the commands in one category
+          help <command>  - show full details for a command
+
+        Categories: control, clock, trace, memory, component, debug,
+                    registers, symbols, settings, script
+        """
+        arg = arg.strip()
+
+        # A specific command always wins over a category of the same spelling.
+        if arg and hasattr(self, 'do_' + arg):
+            return super().do_help(arg)
+
+        # Width of the command-name column, shared by every group so the
+        # description column lines up across the whole listing.
+        all_cmds = [n[3:] for n in dir(self)
+                    if n.startswith('do_') and n not in ('do_EOF', 'do_help')]
+        width = max((len(n) for n in all_cmds), default=0)
+
+        if arg:
+            for key, title, _desc, names in self.HELP_CATEGORIES:
+                if arg.lower() in (key, title.lower()):
+                    self._print_group(title, names, width)
+                    return
+            print(f"No help available for '{arg}'.")
+            return
+
+        # No argument: grouped overview of everything.
+        categorized = set()
+        for key, title, _desc, names in self.HELP_CATEGORIES:
+            self._print_group(title, names, width)
+            categorized.update(names)
+            print()
+
+        # Any command not listed in a category lands in "Other", so a newly
+        # added command is never silently hidden from help.
+        others = sorted(c for c in all_cmds if c not in categorized)
+        if others:
+            self._print_group("Other", others, width)
+            print()
+
+        print("type 'help <command>' for details, 'help <category>' for a group")
+
+    def complete_help(self, text, line, begidx, endidx):
+        """Complete command names and category keys after `help`."""
+        names = {n[3:] for n in dir(self) if n.startswith('do_') and n != 'do_EOF'}
+        names |= {key for key, _t, _d, _c in self.HELP_CATEGORIES}
+        return sorted(n for n in names if n.startswith(text))
 
     # ──────────────────────────────────────────────
     # Simulation Control
