@@ -337,19 +337,16 @@ class GvsocConsole(cmd.Cmd):
         arg = arg.strip()
         if not arg:
             if self.breakpoints or self.watchpoints:
-                # Step in small chunks until breakpoint hit or sim exits.
-                # Each chunk must complete before we can check breakpoint status
-                # (proxy locks the engine during component queries).
-                # 1us chunks balance responsiveness vs overhead.
+                # Free-run at full engine speed; the engine stops itself and notifies us when a
+                # breakpoint/watchpoint is hit (see ISS stop_for_debug), so there is no need to step
+                # in small chunks and poll — which used to make a breakpointed run ~100x slower.
                 print("Running until breakpoint or end...")
-                while True:
-                    self._step(1_000_000, quiet=True)  # 1us chunks
-                    if self._is_breakpoint_hit():
-                        self._check_breakpoint_hit()
-                        break
-                    if self.proxy.reader.sim_has_exited:
-                        print("Simulation exited.")
-                        break
+                self.proxy.run()
+                hit = self.proxy.reader.wait_debug_stop()
+                if self.proxy.reader.sim_has_exited:
+                    print("Simulation exited.")
+                elif hit:
+                    self._check_breakpoint_hit()
             else:
                 self.proxy.run()
                 print("Simulation running.")

@@ -206,6 +206,18 @@ class Proxy(object):
             self.syscall_stop = False
             self.lock.release()
 
+        def wait_debug_stop(self):
+            """Block until the engine reports a debug stop (syscall_stop, e.g. a breakpoint/
+            watchpoint hit) or the simulation exits. Returns True on a debug stop (caller should
+            inspect breakpoint/watchpoint status), False if the simulation exited."""
+            self.lock.acquire()
+            while not self.syscall_stop and not self.sim_has_exited:
+                self.condition.wait()
+            stopped = self.syscall_stop
+            self.syscall_stop = False
+            self.lock.release()
+            return stopped
+
         def wait_running(self):
             self.lock.acquire()
             while not self.running:
