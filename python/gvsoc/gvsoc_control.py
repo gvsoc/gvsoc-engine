@@ -487,6 +487,33 @@ class Proxy(object):
         return [p for p in result.split('|') if p]
 
 
+    def get_cores(self):
+        """Get the component handles of every CPU core in the simulation.
+
+        Returns a list of handle strings. A breakpoint/watchpoint is local to one
+        core, so a front-end watching every core must set it on each of these.
+        """
+        result = self._send_cmd('get_cores')
+        result = result.replace('\n', '')
+        if not result:
+            return []
+        return [p for p in result.split('|') if p]
+
+
+    def get_masters(self):
+        """Get the masters (component paths) that participate in watchpoints.
+
+        A watchpoint can be scoped to a subset of these. The list is populated as
+        masters declare memory accesses, so it may be empty until the simulation
+        has run a little.
+        """
+        result = self._send_cmd('get_masters')
+        result = result.replace('\n', '')
+        if not result:
+            return []
+        return [p for p in result.split('|') if p]
+
+
     def register_exit_callback(self, callback, *kargs, **kwargs):
         """Register exit callback
 

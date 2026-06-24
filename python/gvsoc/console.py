@@ -116,7 +116,7 @@ class GvsocConsole(cmd.Cmd):
         ("component", "Components",         "Send commands to platform components",
             ["component"]),
         ("debug",     "Breakpoints",        "Breakpoints, watchpoints and info",
-            ["break", "watch", "rwatch", "delete", "info"]),
+            ["break", "watch", "rwatch", "delete", "masters", "info"]),
         ("registers", "CPU registers",      "Read CPU registers",
             ["reg"]),
         ("symbols",   "Symbol table",       "Load and resolve ELF symbols",
@@ -142,7 +142,8 @@ class GvsocConsole(cmd.Cmd):
         self.watchpoints = {}  # id -> {'addr': int, 'size': int, 'type': 'write'|'read'}
         self.next_bp_id = 1
         self.iss_path = '**/chip/soc/fc/core'
-        self.iss_ptr = None  # cached ISS component pointer
+        self.iss_ptr = None  # cached ISS component pointer (current core, for reg/registers)
+        self.cores = None  # cached list of all core pointers for breakpoints/watchpoints (lazy)
         self.symbols = {}  # name -> addr
         self.sym_addrs = []  # sorted list of (addr, name) for reverse lookup
         self._loaded_binaries = set()  # engine binaries already auto-loaded (see _sync_binaries)
@@ -886,79 +887,111 @@ class GvsocConsole(cmd.Cmd):
         result = self.proxy._send_cmd(f'component {ptr} {cmd}')
         return result.strip() if result else None
 
-    def _is_halted(self):
-        """Check if the ISS is halted at a breakpoint or watchpoint."""
+    def _get_cores(self):
+        """Return the component pointers of all cores (cached).
+
+        Breakpoints and watchpoints are per-core (each core only checks its own), so they must be
+        set on every core. Falls back to the single selected ISS if the engine cannot enumerate
+        cores (older engine).
+        """
+        if self.cores is None:
+            try:
+                cores = self.proxy.get_cores()
+            except Exception:
+                cores = []
+            if not cores:
+                ptr = self._get_iss()
+                cores = [ptr] if ptr else []
+            self.cores = cores
+        return self.cores
+
+    def _cores_cmd(self, cmd):
+        """Send a command to every core; return a list of (ptr, result)."""
+        results = []
+        for ptr in self._get_cores():
+            result = self.proxy._send_cmd(f'component {ptr} {cmd}')
+            results.append((ptr, result.strip() if result else None))
+        return results
+
+    def _find_hit(self):
+        """Find what stopped the sim. Returns (ptr, kind, status) or None:
+          ('break', a core ptr) for a breakpoint (per-core),
+          ('watch', None)       for a watchpoint (central engine facility, any master).
+        status is the raw 'hit=1 ...' string."""
         if self.breakpoints:
-            result = self._iss_cmd('breakpoint_status')
-            if result and 'hit=1' in result:
-                return True
+            for ptr in self._get_cores():
+                result = self.proxy._send_cmd(f'component {ptr} breakpoint_status')
+                if result and 'hit=1' in result:
+                    return (ptr, 'break', result.strip())
         if self.watchpoints:
-            result = self._iss_cmd('watchpoint_status')
+            result = self.proxy._send_cmd('watchpoint_status')
             if result and 'hit=1' in result:
-                return True
-        return False
+                return (None, 'watch', result.strip())
+        return None
+
+    def _is_halted(self):
+        """Check if any core is halted at a breakpoint or watchpoint."""
+        return self._find_hit() is not None
 
     def _is_breakpoint_hit(self):
-        """Check if a breakpoint or watchpoint was hit."""
+        """Check if a breakpoint or watchpoint was hit on any core."""
         return self._is_halted()
 
     def _check_breakpoint_hit(self):
-        """Check if a breakpoint or watchpoint was hit and print a message."""
-        if self.breakpoints:
-            result = self._iss_cmd('breakpoint_status')
-            if result and 'hit=1' in result:
-                addr = None
-                for part in result.split():
-                    if part.startswith('addr='):
-                        addr = int(part.split('=')[1], 0)
-                bp_id = None
-                if addr is not None:
-                    for bid, bp in self.breakpoints.items():
-                        if bp['addr'] == addr:
-                            bp_id = bid
-                            break
-                if addr is not None:
-                    sym = self._addr_to_symbol(addr)
-                    loc = f"0x{addr:08X}"
-                    if sym:
-                        loc += f" <{sym}>"
-                    if bp_id is not None:
-                        print(f"Breakpoint {bp_id} hit at {loc}")
-                    else:
-                        print(f"Breakpoint hit at {loc}")
-        if self.watchpoints:
-            result = self._iss_cmd('watchpoint_status')
-            if result and 'hit=1' in result:
-                addr = None
-                is_write = True
-                for part in result.split():
-                    if part.startswith('addr='):
-                        addr = int(part.split('=')[1], 0)
-                    elif part.startswith('is_write='):
-                        is_write = (part.split('=')[1] != '0')
-                kind = "Write" if is_write else "Read"
-                if addr is not None:
-                    sym = self._addr_to_symbol(addr)
-                    loc = f"0x{addr:08X}"
-                    if sym:
-                        loc += f" <{sym}>"
-                    # Find matching watchpoint
-                    wp_id = None
-                    for wid, wp in self.watchpoints.items():
-                        if wp['addr'] <= addr < wp['addr'] + wp['size']:
-                            wp_id = wid
-                            break
-                    if wp_id is not None:
-                        print(f"{kind} watchpoint {wp_id} hit at {loc}")
-                    else:
-                        print(f"{kind} watchpoint hit at {loc}")
+        """Report the breakpoint/watchpoint that was hit, on whichever core hit it."""
+        hit = self._find_hit()
+        if hit is None:
+            return
+        ptr, kind, result = hit
+
+        if kind == 'break':
+            # Make the core that hit the current one, so `reg` shows its state, and note which core.
+            self.iss_ptr = ptr
+            cores = self._get_cores()
+            core_note = f" (core {cores.index(ptr)})" if ptr in cores and len(cores) > 1 else ""
+            addr = None
+            for part in result.split():
+                if part.startswith('addr='):
+                    addr = int(part.split('=')[1], 0)
+            if addr is not None:
+                bp_id = next((bid for bid, bp in self.breakpoints.items() if bp['addr'] == addr), None)
+                loc = f"0x{addr:08X}"
+                sym = self._addr_to_symbol(addr)
+                if sym:
+                    loc += f" <{sym}>"
+                label = f"Breakpoint {bp_id}" if bp_id is not None else "Breakpoint"
+                print(f"{label} hit at {loc}{core_note}")
+        else:
+            # Central watchpoint: the status reports the master (any master, not only cores).
+            addr = None
+            is_write = True
+            master = None
+            for part in result.split():
+                if part.startswith('addr='):
+                    addr = int(part.split('=')[1], 0)
+                elif part.startswith('is_write='):
+                    is_write = (part.split('=')[1] != '0')
+                elif part.startswith('master='):
+                    master = part.split('=', 1)[1]
+            if addr is not None:
+                wp_id = next((wid for wid, wp in self.watchpoints.items()
+                              if wp['addr'] <= addr < wp['addr'] + wp['size']), None)
+                loc = f"0x{addr:08X}"
+                sym = self._addr_to_symbol(addr)
+                if sym:
+                    loc += f" <{sym}>"
+                wkind = "Write" if is_write else "Read"
+                label = f"{wkind} watchpoint {wp_id}" if wp_id is not None else f"{wkind} watchpoint"
+                master_note = f" by {master}" if master else ""
+                print(f"{label} hit at {loc}{master_note}")
 
     def _resume_if_halted(self):
-        """Resume the ISS if it is halted at a breakpoint or watchpoint."""
-        if not self.breakpoints and not self.watchpoints:
-            return
-        if self._is_halted():
-            self._iss_cmd('resume')
+        """Clear a pending breakpoint (per-core) or watchpoint (central) hit so the next run makes
+        progress. No-op on cores not halted."""
+        if self.breakpoints:
+            self._cores_cmd('resume')
+        if self.watchpoints:
+            self.proxy._send_cmd('watchpoint_resume')
 
     def do_break(self, arg):
         """Set a breakpoint at an address or symbol.
@@ -979,9 +1012,9 @@ class GvsocConsole(cmd.Cmd):
             print(f"Error: cannot resolve '{arg}' (not a valid address or known symbol)")
             return
 
-        result = self._iss_cmd(f'breakpoint_insert 0x{addr:x}')
-        if result is None:
-            return
+        # Set on every core: a breakpoint is local to one core, so to catch the PC on whichever
+        # core reaches it (FC or any cluster core), it must be inserted on all of them.
+        self._cores_cmd(f'breakpoint_insert 0x{addr:x}')
 
         bp_id = self.next_bp_id
         self.next_bp_id += 1
@@ -989,10 +1022,17 @@ class GvsocConsole(cmd.Cmd):
         print(f"Breakpoint {bp_id} at 0x{addr:08X}")
 
     def _add_watchpoint(self, arg, wp_type):
-        """Add a watchpoint (write or read)."""
+        """Add a watchpoint (write or read), optionally scoped to specific masters."""
         parts = arg.strip().split()
+        # Optional "on <master>..." restricts the watchpoint to masters whose component path contains
+        # one of the given patterns (e.g. dma, ne16, fc, pe0). Default: every master.
+        masters = []
+        if 'on' in parts:
+            idx = parts.index('on')
+            masters = parts[idx + 1:]
+            parts = parts[:idx]
         if not parts:
-            print(f"Usage: {'watch' if wp_type == 'write' else 'rwatch'} <address> [size]")
+            print(f"Usage: {'watch' if wp_type == 'write' else 'rwatch'} <address> [size] [on <master>...]")
             return
 
         addr = self._resolve_addr(parts[0])
@@ -1009,15 +1049,19 @@ class GvsocConsole(cmd.Cmd):
                 return
 
         is_write = 1 if wp_type == 'write' else 0
-        result = self._iss_cmd(f'watchpoint_insert {is_write} 0x{addr:x} {size}')
-        if result is None:
-            return
+        # Central watchpoint: matched as any master declares its accesses, so it catches every master
+        # (cores, cluster DMA, accelerators); the optional master patterns scope it to a subset.
+        cmd = f'watchpoint_insert {is_write} 0x{addr:x} {size}'
+        if masters:
+            cmd += ' ' + ' '.join(masters)
+        self.proxy._send_cmd(cmd)
 
         wp_id = self.next_bp_id
         self.next_bp_id += 1
-        self.watchpoints[wp_id] = {'addr': addr, 'size': size, 'type': wp_type}
+        self.watchpoints[wp_id] = {'addr': addr, 'size': size, 'type': wp_type, 'masters': masters}
         kind = "Write" if wp_type == 'write' else "Read"
-        print(f"{kind} watchpoint {wp_id} at 0x{addr:08X} (size={size})")
+        scope = f" on {', '.join(masters)}" if masters else ""
+        print(f"{kind} watchpoint {wp_id} at 0x{addr:08X} (size={size}){scope}")
 
     def do_watch(self, arg):
         """Set a write watchpoint.
@@ -1026,8 +1070,12 @@ class GvsocConsole(cmd.Cmd):
           watch *0x1c000a00         - watch 4 bytes at address
           watch 0x1c000a00 8        - watch 8 bytes at address
           watch my_variable         - watch symbol (requires symbol load)
+          watch *0x4000 on ne16     - only when master 'ne16' writes it
+          watch buf 8 on dma pe0    - only the cluster DMA or core pe0
 
-        Stops when the watched address is written.
+        Watchpoints apply to every master (cores, DMA, accelerators) by default; an
+        'on <master>...' suffix restricts them to masters whose path contains one of
+        the patterns. Stops when the watched address is written.
         """
         self._add_watchpoint(arg, 'write')
 
@@ -1037,10 +1085,33 @@ class GvsocConsole(cmd.Cmd):
         Usage:
           rwatch *0x1c000a00        - watch 4 bytes at address
           rwatch 0x1c000a00 8       - watch 8 bytes at address
+          rwatch *0x4000 on ne16    - only when master 'ne16' reads it
 
+        Applies to every master by default; 'on <master>...' restricts it (see 'watch').
         Stops when the watched address is read.
         """
         self._add_watchpoint(arg, 'read')
+
+    def do_masters(self, arg):
+        """List the masters a watchpoint can be scoped to.
+
+        Usage: masters
+
+        Shows the component paths of everything that accesses memory and so can trigger a
+        watchpoint (cores, cluster DMA, accelerators, ...). Use any substring of a path as the
+        target of 'watch <addr> on <master>'. The list is filled in as masters access memory, so
+        run or step the simulation first if it is empty.
+        """
+        try:
+            masters = self.proxy.get_masters()
+        except Exception as e:
+            print(f"Error: {e}")
+            return
+        if not masters:
+            print("No masters recorded yet (run or step the simulation first).")
+            return
+        for m in masters:
+            print(f"  {m}")
 
     def do_delete(self, arg):
         """Delete breakpoint(s) or watchpoint(s).
@@ -1051,10 +1122,10 @@ class GvsocConsole(cmd.Cmd):
         """
         if not arg:
             for bp_id, bp in list(self.breakpoints.items()):
-                self._iss_cmd(f'breakpoint_remove 0x{bp["addr"]:x}')
+                self._cores_cmd(f'breakpoint_remove 0x{bp["addr"]:x}')
             for wp_id, wp in list(self.watchpoints.items()):
                 is_write = 1 if wp['type'] == 'write' else 0
-                self._iss_cmd(f'watchpoint_remove {is_write} 0x{wp["addr"]:x} {wp["size"]}')
+                self.proxy._send_cmd(f'watchpoint_remove {is_write} 0x{wp["addr"]:x} {wp["size"]}')
             self.breakpoints.clear()
             self.watchpoints.clear()
             print("All breakpoints and watchpoints deleted.")
@@ -1068,12 +1139,12 @@ class GvsocConsole(cmd.Cmd):
 
         if item_id in self.breakpoints:
             bp = self.breakpoints.pop(item_id)
-            self._iss_cmd(f'breakpoint_remove 0x{bp["addr"]:x}')
+            self._cores_cmd(f'breakpoint_remove 0x{bp["addr"]:x}')
             print(f"Breakpoint {item_id} deleted.")
         elif item_id in self.watchpoints:
             wp = self.watchpoints.pop(item_id)
             is_write = 1 if wp['type'] == 'write' else 0
-            self._iss_cmd(f'watchpoint_remove {is_write} 0x{wp["addr"]:x} {wp["size"]}')
+            self.proxy._send_cmd(f'watchpoint_remove {is_write} 0x{wp["addr"]:x} {wp["size"]}')
             print(f"Watchpoint {item_id} deleted.")
         else:
             print(f"Error: no breakpoint or watchpoint {item_id}")
@@ -1101,7 +1172,9 @@ class GvsocConsole(cmd.Cmd):
                 print(f"{bp_id:<6} {'break':<8} 0x{bp['addr']:08X}     {sym}")
             for wp_id, wp in sorted(self.watchpoints.items()):
                 kind = 'watch' if wp['type'] == 'write' else 'rwatch'
-                print(f"{wp_id:<6} {kind:<8} 0x{wp['addr']:08X}     size={wp['size']}")
+                masters = wp.get('masters') or []
+                scope = f" on {', '.join(masters)}" if masters else ""
+                print(f"{wp_id:<6} {kind:<8} 0x{wp['addr']:08X}     size={wp['size']}{scope}")
         elif parts[0] in ('registers', 'reg', 'r'):
             self.do_reg('')
         else:

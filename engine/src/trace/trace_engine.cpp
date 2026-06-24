@@ -22,10 +22,82 @@
 #include <vp/vp.hpp>
 #include <vp/itf/clk.hpp>
 #include <vp/trace/trace_engine.hpp>
+#include <vp/controller.hpp>
+#include <vp/top.hpp>
 #include <vector>
 #include <thread>
 #include <set>
+#include <algorithm>
 #include <string.h>
+
+void vp::TraceEngine::watchpoint_insert(uint64_t addr, uint64_t size, bool is_write,
+    const std::vector<std::string> &masters)
+{
+    this->watchpoints.push_back({addr, size, is_write, masters});
+    this->watchpoints_active = true;
+}
+
+void vp::TraceEngine::watchpoint_remove(uint64_t addr, uint64_t size, bool is_write)
+{
+    for (auto it = this->watchpoints.begin(); it != this->watchpoints.end(); )
+    {
+        if (it->addr == addr && it->size == size && it->is_write == is_write)
+        {
+            it = this->watchpoints.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    this->watchpoints_active = !this->watchpoints.empty();
+}
+
+void vp::TraceEngine::check_access(vp::Block *master, uint64_t addr, uint64_t size, bool is_write)
+{
+    std::string master_path = master->get_path();
+    for (auto &wp : this->watchpoints)
+    {
+        // Overlap test, matching the access direction (write watchpoint -> writes, read -> reads).
+        if (wp.is_write != is_write || addr >= wp.addr + wp.size || wp.addr >= addr + size)
+        {
+            continue;
+        }
+        // Optional master filter: only hit if the master's path matches one of the patterns.
+        if (!wp.masters.empty())
+        {
+            bool match = false;
+            for (auto &pattern : wp.masters)
+            {
+                if (master_path.find(pattern) != std::string::npos)
+                {
+                    match = true;
+                    break;
+                }
+            }
+            if (!match)
+            {
+                continue;
+            }
+        }
+        {
+            this->watchpoint_hit = true;
+            this->watchpoint_hit_addr = std::max(addr, wp.addr);
+            this->watchpoint_hit_is_write = is_write;
+            this->watchpoint_hit_master = master_path;
+            // Stop the whole simulation and notify proxy clients, the same way a breakpoint hit does
+            // (see iss_v2 Gdbserver::stop_for_debug). The access itself still completes, so a resume
+            // continues past it rather than re-triggering.
+            gv::Controller *launcher = this->top->get_launcher();
+            if (launcher)
+            {
+                launcher->syscall_stop_handle();
+                launcher->top_get()->get_time_engine()->pause();
+            }
+            return;
+        }
+    }
+}
 
 int64_t vp::TraceEngine::event_declare(Event *event)
 {

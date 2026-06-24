@@ -32,6 +32,28 @@ namespace vp {
     {
         return this->engine;
     }
+
+    inline void BlockTrace::register_as_master()
+    {
+        if (!this->master_registered)
+        {
+            this->master_registered = true;
+            this->engine->register_master(this->top.get_path());
+        }
+    }
+
+    inline void BlockTrace::declare_access(uint64_t addr, uint64_t size, bool is_write)
+    {
+        // Fallback registration in case the master did not register at reset; one-time per block, the
+        // bool check afterwards is negligible.
+        this->register_as_master();
+        // Fast path: nothing more to do unless a watchpoint is set. The owning block is the master
+        // that made the access, so check_access knows which master hit.
+        if (this->engine->watchpoints_active)
+        {
+            this->engine->check_access(&this->top, addr, size, is_write);
+        }
+    }
     #ifdef CONFIG_GVSOC_EVENT_ACTIVE
     inline void vp::Event::dump_value(uint8_t *value, int64_t time_delay)
     {

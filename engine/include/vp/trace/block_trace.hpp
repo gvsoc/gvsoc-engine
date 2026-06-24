@@ -62,6 +62,25 @@ namespace vp
         inline TraceEngine *get_trace_engine();
 
         /**
+         * @brief Declare a memory access made by this block, for watchpoint matching.
+         *
+         * Any master (CPU core, DMA, accelerator) calls this on each memory access it issues so the
+         * generic, central watchpoint facility can match it and stop the simulation on a hit —
+         * regardless of which master made the access. It is gated by a fast flag, so it is ~free when
+         * no watchpoint is set.
+         */
+        inline void declare_access(uint64_t addr, uint64_t size, bool is_write);
+
+        /**
+         * @brief Register this block as a watchpoint-capable master.
+         *
+         * Makes the block appear in the engine's master list (queryable by a front-end) so a
+         * watchpoint can be scoped to it. Call once, e.g. from the block's reset(), so the master is
+         * known before the simulation runs. Idempotent; declare_access also calls it as a fallback.
+         */
+        inline void register_as_master();
+
+        /**
          * @brief Assertion check reported through the block's trace.
          *
          * If the condition is false, the optional printf-style message is
@@ -95,6 +114,9 @@ namespace vp
         Block &top;
 
         vp::TraceEngine *engine = NULL;
+        // Set once this block has registered itself as a watchpoint-capable master (see
+        // declare_access), so we only register it with the engine on its first declared access.
+        bool master_registered = false;
     };
 
 };

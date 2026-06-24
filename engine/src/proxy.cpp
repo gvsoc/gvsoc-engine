@@ -560,6 +560,87 @@ void gv::GvProxySession::proxy_loop()
                     fflush(reply_sock);
                     lock.unlock();
                 }
+                else if (words[0] == "get_cores")
+                {
+                    // Return the handles of every CPU core, so a client can set breakpoints and
+                    // watchpoints on all of them (each core only checks its own).
+                    std::string result;
+                    for (auto core : gv::Controller::get().get_cores())
+                    {
+                        if (!result.empty())
+                            result += "|";
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%p", (void *)core);
+                        result += buf;
+                    }
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=%s\n", req.c_str(), result.c_str());
+                    fflush(reply_sock);
+                    lock.unlock();
+                }
+                else if (words[0] == "watchpoint_insert" || words[0] == "watchpoint_remove")
+                {
+                    // Generic memory watchpoint: matched centrally as any master declares its
+                    // accesses (BlockTrace::declare_access), so it catches cores, DMA, accelerators.
+                    // Args: <is_write> <addr> <size> [master-path-pattern...]. The optional patterns
+                    // scope the watchpoint to masters whose path contains one of them (default: all).
+                    bool is_write = words.size() > 1 && words[1] != "0";
+                    uint64_t addr = words.size() > 2 ? strtoull(words[2].c_str(), NULL, 0) : 0;
+                    uint64_t size = words.size() > 3 ? strtoull(words[3].c_str(), NULL, 0) : 0;
+                    vp::TraceEngine *te = this->proxy->top->traces.get_trace_engine();
+                    if (words[0] == "watchpoint_insert")
+                    {
+                        std::vector<std::string> masters;
+                        for (size_t i = 4; i < words.size(); i++)
+                            masters.push_back(words[i]);
+                        te->watchpoint_insert(addr, size, is_write, masters);
+                    }
+                    else
+                        te->watchpoint_remove(addr, size, is_write);
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=ok\n", req.c_str());
+                    fflush(reply_sock);
+                    lock.unlock();
+                }
+                else if (words[0] == "get_masters")
+                {
+                    // List the masters (component paths) that participate in watchpoints, so a client
+                    // can scope a watchpoint to a subset. Populated as masters declare accesses.
+                    std::string result;
+                    for (auto &m : this->proxy->top->traces.get_trace_engine()->get_masters())
+                    {
+                        if (!result.empty())
+                            result += "|";
+                        result += m;
+                    }
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=%s\n", req.c_str(), result.c_str());
+                    fflush(reply_sock);
+                    lock.unlock();
+                }
+                else if (words[0] == "watchpoint_status")
+                {
+                    vp::TraceEngine *te = this->proxy->top->traces.get_trace_engine();
+                    char buf[512];
+                    if (te->watchpoint_hit)
+                        snprintf(buf, sizeof(buf), "hit=1 addr=0x%lx is_write=%d master=%s",
+                            (unsigned long)te->watchpoint_hit_addr, te->watchpoint_hit_is_write ? 1 : 0,
+                            te->watchpoint_hit_master.c_str());
+                    else
+                        snprintf(buf, sizeof(buf), "hit=0");
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=%s\n", req.c_str(), buf);
+                    fflush(reply_sock);
+                    lock.unlock();
+                }
+                else if (words[0] == "watchpoint_resume")
+                {
+                    this->proxy->top->traces.get_trace_engine()->watchpoint_clear_hit();
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=ok\n", req.c_str());
+                    fflush(reply_sock);
+                    lock.unlock();
+                }
                 else if (words[0] == "component")
                 {
                     vp::Component *comp = (vp::Component *)strtoll(words[1].c_str(), NULL, 0);

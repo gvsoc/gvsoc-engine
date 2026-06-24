@@ -30,6 +30,7 @@
 #include <regex.h>
 #include <queue>
 #include <unordered_map>
+#include <set>
 
 namespace vp {
 
@@ -152,6 +153,36 @@ namespace vp {
         int64_t event_declare(Event *event);
         vp::Event_file *get_event_file(std::string file);
 
+        // --- Generic memory watchpoints ---
+        // Watchpoints are declared centrally here and shared by all blocks. Any master that issues a
+        // memory access calls BlockTrace::declare_access(), which (gated by watchpoints_active)
+        // forwards to check_access() below. On a match the whole simulation is stopped and proxy
+        // clients are notified, exactly like a breakpoint hit. This makes watchpoints work for any
+        // master that declares accesses (cores, cluster DMA, accelerators), not just CPU cores.
+        // `masters` is an optional list of master-path patterns (substring match). Empty = match any
+        // master; otherwise the access only hits if its master's path contains one of the patterns.
+        struct Watchpoint { uint64_t addr; uint64_t size; bool is_write; std::vector<std::string> masters; };
+        void watchpoint_insert(uint64_t addr, uint64_t size, bool is_write,
+            const std::vector<std::string> &masters = {});
+        void watchpoint_remove(uint64_t addr, uint64_t size, bool is_write);
+        void watchpoint_clear_hit() { this->watchpoint_hit = false; }
+        // Match a declared access against the watchpoints; stop + notify on a hit. Caller has already
+        // checked watchpoints_active.
+        void check_access(vp::Block *master, uint64_t addr, uint64_t size, bool is_write);
+        // Record a master (component path) that participates in watchpoints. Called once per master
+        // (BlockTrace::declare_access registers it the first time it declares an access), so a client
+        // can list the masters a watchpoint can be scoped to. get_masters returns the sorted set.
+        void register_master(const std::string &path) { this->masters_set.insert(path); }
+        std::vector<std::string> get_masters()
+        { return std::vector<std::string>(this->masters_set.begin(), this->masters_set.end()); }
+        // Fast gate read inline by BlockTrace::declare_access: true iff at least one watchpoint set.
+        bool watchpoints_active = false;
+        // Most recent hit, reported to the front-end via the proxy.
+        bool watchpoint_hit = false;
+        uint64_t watchpoint_hit_addr = 0;
+        bool watchpoint_hit_is_write = false;
+        std::string watchpoint_hit_master;
+
     protected:
         std::map<std::string, Trace *> traces_map;
         std::vector<Trace *> traces_array;
@@ -203,6 +234,8 @@ namespace vp {
         bool memcheck_enabled;
         std::unordered_map<const char *, const char *> strings;
         std::map<std::string, Event_file *> event_files;
+        std::vector<Watchpoint> watchpoints;
+        std::set<std::string> masters_set;
     };
 };
 

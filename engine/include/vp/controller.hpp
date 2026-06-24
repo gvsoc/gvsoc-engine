@@ -146,6 +146,12 @@ namespace gv {
         // get_binaries proxy command.
         std::vector<std::string> get_binaries();
 
+        // Register a CPU core component (each ISS registers itself), and query the registered cores.
+        // Used by proxy clients (e.g. the console) to set breakpoints/watchpoints on every core
+        // rather than just one, since each core only checks its own.
+        void register_core(vp::Component *core);
+        std::vector<vp::Component *> get_cores();
+
         double get_instant_power(double &dynamic_power, double &static_power, ControllerClient *client);
         double get_average_power(double &dynamic_power, double &static_power, ControllerClient *client);
         void report_start(ControllerClient *client);
@@ -242,6 +248,8 @@ namespace gv {
         // proxy clients by get_binaries(). Accumulated here (not in the proxy) so it survives the
         // proxy not yet existing at declaration time and covers binaries added during execution.
         std::vector<std::string> declared_binaries;
+        // CPU core components registered via register_core; returned to proxy clients by get_cores().
+        std::vector<vp::Component *> cores;
         // When a proxy is enabled, tells whether start() must block until a client connects. True
         // for a config-enabled (standalone) proxy; false for an in-process host (the GUI) so the
         // engine can start without an attached console.

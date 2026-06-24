@@ -137,6 +137,23 @@ std::vector<std::string> gv::Controller::get_binaries()
     return this->declared_binaries;
 }
 
+void gv::Controller::register_core(vp::Component *core)
+{
+    for (auto c: this->cores)
+    {
+        if (c == core)
+        {
+            return;
+        }
+    }
+    this->cores.push_back(core);
+}
+
+std::vector<vp::Component *> gv::Controller::get_cores()
+{
+    return this->cores;
+}
+
 void gv::Controller::init(gv::GvsocConf *conf)
 {
     if (!this->is_init)
