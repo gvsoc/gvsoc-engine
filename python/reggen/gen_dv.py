@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 '''Generate DV code for an IP block'''
 
+from importlib.resources import as_file, files
 import logging as log
 import os
 from typing import List
@@ -11,7 +12,6 @@ import yaml
 
 from mako import exceptions  # type: ignore
 from mako.lookup import TemplateLookup  # type: ignore
-from pkg_resources import resource_filename
 
 from .ip_block import IpBlock
 from .register import Register
@@ -74,7 +74,8 @@ def gen_core_file(outdir: str,
 def gen_dv(block: IpBlock, dv_base_prefix: str, outdir: str) -> int:
     '''Generate DV files for an IpBlock'''
 
-    lookup = TemplateLookup(directories=[resource_filename('reggen', '.')])
+    with as_file(files('reggen').joinpath('.')) as f:
+        lookup = TemplateLookup(directories=[str(f)])
     uvm_reg_tpl = lookup.get_template('uvm_reg.sv.tpl')
 
     # Generate the RAL package(s). For a device interface with no name we

@@ -6,21 +6,21 @@
 """Generate FPV CSR read and write assertions from IpBlock
 """
 
+from importlib.resources import as_file, files
 import logging as log
 import os.path
 
 import yaml
 from mako import exceptions
 from mako.template import Template
-from pkg_resources import resource_filename
 
 from .ip_block import IpBlock
 
 
 def gen_fpv(block: IpBlock, outdir):
     # Read Register templates
-    fpv_csr_tpl = Template(
-        filename=resource_filename('reggen', 'fpv_csr.sv.tpl'))
+    with as_file(files('reggen').joinpath('fpv_csr.sv.tpl')) as f:
+        fpv_csr_tpl = Template(filename=str(f))
 
     # Generate a module with CSR assertions for each device interface. For a
     # device interface with no name, we generate <block>_csr_assert_fpv. For a
