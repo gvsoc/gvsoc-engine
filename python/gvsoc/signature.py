@@ -100,10 +100,65 @@ class IoV2BigPacket(Signature):
         # Legacy 'io_v2' string slave is the historic big-packet default.
         if isinstance(other, str):
             return other == self.tag
-        # IoV2Sync is a tighter version of the same response surface; a
-        # big-packet master is already prepared to handle the sync DONE
-        # response form, so this binds directly.
-        return isinstance(other, (IoV2BigPacket, IoV2Sync))
+        # IoV2Sync and IoV2SingleReq are tighter subsets of the same response
+        # surface; a big-packet master already handles their (single-beat)
+        # responses, so it binds directly.
+        return isinstance(other, (IoV2BigPacket, IoV2Sync, IoV2SingleReq))
+
+    def bridge_to(self, other, parent, name):
+        # A big-packet master cannot consume the per-beat response stream of a
+        # beat slave: insert the inverse of IoV2BeatAdapter, which forwards the
+        # access as beats and collapses the N-beat response into one big-packet
+        # reply. Everything else (big-packet / sync / single-req / legacy
+        # 'io_v2' string / unsignatured slaves) is directly compatible.
+        if isinstance(other, IoV2Beat):
+            from utils.io_v2_beat_collapse_adapter import IoV2BeatCollapseAdapter
+            return IoV2BeatCollapseAdapter(parent, name, beat_width=other.beat_width)
+        return None
+
+
+class IoV2SingleReq(Signature):
+    """io_v2 restricted to single-request / single-beat accesses — the HW lint
+    (req / gnt / r_valid) memory fabric.
+
+    Each access is a single word and the response is always a **single beat**:
+    inline ``IO_REQ_DONE``, or ``IO_REQ_GRANTED`` + exactly one ``resp()`` (and
+    ``IO_REQ_DENIED`` + ``retry()`` for back-pressure) — but **never** a
+    multi-beat response stream. So this sits strictly between:
+
+      - :class:`IoV2BigPacket` (looser — may answer with a multi-beat stream),
+        and
+      - :class:`IoV2Sync` (tighter — must answer inline, no async / no deny).
+
+    Components that route a response back by *object identity* — functional /
+    bandwidth routers (``in_flight_map[req]``), the width/opcode splitters
+    (``req->parent``) — implement exactly this contract: they rely on the
+    single-beat response coming back on the very request object they sent, so
+    they cannot handle the per-beat stream of a beat slave. Declaring
+    IoV2SingleReq makes that a checked invariant rather than an implicit
+    assumption: a beat master/slave on the other side forces a converter.
+    """
+
+    tag = 'io_v2'
+
+    def label(self):
+        return 'io_v2 (single-req)'
+
+    def is_compatible(self, other):
+        if isinstance(other, str):
+            return other == self.tag
+        # Direct to any single-beat peer (single-req / big-packet / sync). A
+        # beat peer (multi-beat) is handled in bridge_to.
+        return isinstance(other, (IoV2SingleReq, IoV2BigPacket, IoV2Sync))
+
+    def bridge_to(self, other, parent, name):
+        # A beat slave streams multi-beat responses this single-req master
+        # cannot consume: insert the collapse converter (beat -> single-beat),
+        # exactly as a big-packet master would.
+        if isinstance(other, IoV2Beat):
+            from utils.io_v2_beat_collapse_adapter import IoV2BeatCollapseAdapter
+            return IoV2BeatCollapseAdapter(parent, name, beat_width=other.beat_width)
+        return None
 
 
 class IoV2Sync(Signature):
@@ -202,7 +257,7 @@ class IoV2Beat(Signature):
         # the three response forms, including the sync DONE that beat-fidelity
         # masters cannot consume directly. ``IoV2Sync`` is a strict subset
         # of that surface (DONE only), so the same adapter handles it.
-        if isinstance(other, (IoV2BigPacket, IoV2Sync)) or other == IoV2BigPacket.tag:
+        if isinstance(other, (IoV2BigPacket, IoV2Sync, IoV2SingleReq)) or other == IoV2BigPacket.tag:
             from utils.io_v2_beat_adapter import IoV2BeatAdapter
             return IoV2BeatAdapter(parent, name, beat_width=self.beat_width)
         # IoV2Beat <-> IoV2Beat with differing widths is a SoC design error,
