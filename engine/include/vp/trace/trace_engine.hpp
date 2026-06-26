@@ -187,6 +187,14 @@ namespace vp {
         std::map<std::string, Trace *> traces_map;
         std::vector<Trace *> traces_array;
         std::vector<Trace *> events_array;
+        // Path -> indices into events_array, populated at registration time.
+        // Lets event_subscribe()/event_unsubscribe() resolve an exact-match
+        // pattern with a single hash lookup instead of scanning every declared
+        // event. A vector is kept (not a single index) so the rare case of a
+        // path shared by several event entries still subscribes them all,
+        // matching the linear-scan semantics. events_array is append-only, so
+        // these indices stay valid for the engine's lifetime.
+        std::unordered_map<std::string, std::vector<int>> events_by_path;
         std::vector<bool> is_event;
         std::vector<bool> active_warnings;
         int trace_format;
