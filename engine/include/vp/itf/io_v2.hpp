@@ -113,6 +113,16 @@ typedef enum { IO_REQ_GRANTED, IO_REQ_DENIED, IO_REQ_DONE } IoReqStatus;
 
 typedef enum { IO_RESP_OK, IO_RESP_INVALID } IoRespStatus;
 
+// Flow-control result of IoSlave::resp() — the response-path analogue of
+// IoReqStatus on the request path. A response is terminal, so it has only two
+// outcomes: the consumer accepted the beat (IO_RESP_ACCEPTED, ownership returns
+// to the producer's caller) or back-pressured it (IO_RESP_DENIED, the producer
+// holds the beat unchanged and re-sends it on resp_retry()). This is kept
+// separate from IoRespStatus, which reports the response *payload* status
+// (OK / INVALID error) — an orthogonal axis a beat carries regardless of whether
+// it was accepted.
+typedef enum { IO_RESP_ACCEPTED, IO_RESP_DENIED } IoRespAck;
+
 // Channel a retry() pertains to. A master that splits traffic into independent
 // read / write channels (AXI AR/AW vs R) can be back-pressured on one channel
 // while the other keeps flowing. A slave names the channel it became ready on;
@@ -125,10 +135,25 @@ typedef enum { IO_RETRY_READ = 0, IO_RETRY_WRITE = 1, IO_RETRY_ANY = 2 } IoRetry
 typedef IoReqStatus(IoSlaveReqMeth)(vp::Block *, vp::IoReq *);
 typedef IoReqStatus(IoSlaveReqMethMuxed)(vp::Block *, IoReq *, int id);
 
-typedef void(IoMasterRespMeth)(vp::Block *, vp::IoReq *);
-typedef void(IoMasterRespMethMuxed)(vp::Block *, vp::IoReq *, int id);
+// The response callback returns IoRespAck: the consumer answers IO_RESP_ACCEPTED
+// to take the beat, or IO_RESP_DENIED to back-pressure it (the producer then
+// holds the beat and re-sends on resp_retry()). A consumer that always accepts
+// simply returns IO_RESP_ACCEPTED.
+typedef IoRespAck(IoMasterRespMeth)(vp::Block *, vp::IoReq *);
+typedef IoRespAck(IoMasterRespMethMuxed)(vp::Block *, vp::IoReq *, int id);
 typedef void(IoMasterRetryMeth)(vp::Block *, IoRetryChannel channel);
 typedef void(IoMasterRetryMethMuxed)(vp::Block *, int id, IoRetryChannel channel);
+
+// Response-path back-pressure (the AXI R/RREADY analogue), symmetric to the
+// request-path retry above. A producer replies with IoSlave::resp(); the
+// consumer's resp callback returns IO_RESP_DENIED to refuse the beat this cycle
+// (IoSlave::resp() propagates that return). The producer then holds the beat and
+// re-sends it when the consumer later calls IoMaster::resp_retry(), which
+// dispatches to the producer's resp_retry_meth. A consumer that always accepts
+// returns IO_RESP_ACCEPTED and no producer ever needs a resp_retry_meth — the
+// whole mechanism is free when unused.
+typedef void(IoSlaveRespRetryMeth)(vp::Block *, IoRetryChannel channel);
+typedef void(IoSlaveRespRetryMethMuxed)(vp::Block *, int id, IoRetryChannel channel);
 
 class IoReq : public vp::QueueElem {
     friend class IoMaster;
@@ -247,8 +272,24 @@ class IoMaster : public vp::MasterPort {
     // Return if this master port is bound.
     bool is_bound();
 
+    // True if the bound slave registered a resp_retry handler — i.e. it can be
+    // told to re-send a back-pressured response. A consumer must not deny a
+    // resp() (nor call resp_retry()) on a slave that lacks one.
+    inline bool is_resp_retry_bound() { return this->slave_resp_retry_meth != NULL; }
+
     // Can be called by master component to send an IO request.
     inline IoReqStatus req(IoReq *req);
+
+    // Signals the bound slave (the producer of responses) that this master is
+    // ready to accept responses again after a previous resp() it denied (by
+    // returning IO_RESP_DENIED). Carries no request, symmetric to IoSlave::retry()
+    // on the request path: the master does not track which beats it denied, it
+    // just announces readiness and the producer re-sends its held beat.
+    //
+    // Like request-path retry, this MUST be serviced synchronously: the producer
+    // re-submits its held beat inside its resp_retry callback (same cycle). The
+    // `channel` names which response channel became ready (READ/WRITE/ANY).
+    inline void resp_retry(IoRetryChannel channel = IO_RETRY_ANY);
 
     /*
      * Reserved for framework
@@ -283,6 +324,11 @@ class IoMaster : public vp::MasterPort {
     // Callback set by the user on slave port and retrieved during binding
     void *slave_req_meth;
 
+    // Slave resp_retry callback, retrieved from the slave port during binding.
+    // Lets this master signal the producer that responses can flow again. NULL
+    // when the producer did not register one (it never expects to be denied).
+    void *slave_resp_retry_meth;
+
     /*
      * Stubs
      */
@@ -291,6 +337,10 @@ class IoMaster : public vp::MasterPort {
     // can capture the master call and transform it into the slave call with the
     // right mux ID.
     static inline IoReqStatus req_muxed_stub(IoMaster *_this, IoReq *req);
+
+    // Same idea for resp_retry: inject the slave mux ID on the master->slave
+    // response-retry call when the slave port is multiplexed.
+    static inline void resp_retry_muxed_stub(IoMaster *_this, IoRetryChannel channel);
 
     /*
      * Internal data
@@ -303,6 +353,8 @@ class IoMaster : public vp::MasterPort {
     vp::Block *slave_context_for_mux;
 
     void *slave_req_meth_for_mux;
+
+    void *slave_resp_retry_meth_for_mux;
 
     // This data is the multiplex ID that we need to send to the slave when the slave port
     // is multiplexed.
@@ -321,9 +373,12 @@ class IoSlave : public vp::SlavePort {
 
   public:
 
-    // Constructor
-    inline IoSlave(IoSlaveReqMeth *meth);
-    inline IoSlave(int id, IoSlaveReqMethMuxed *meth);
+    // Constructor. resp_retry_meth is optional: a producer only needs it if its
+    // bound consumer may deny a resp() (response-path back-pressure). Leave it
+    // NULL for the common case where responses are always accepted.
+    inline IoSlave(IoSlaveReqMeth *meth, IoSlaveRespRetryMeth *resp_retry_meth = nullptr);
+    inline IoSlave(int id, IoSlaveReqMethMuxed *meth,
+                   IoSlaveRespRetryMethMuxed *resp_retry_meth = nullptr);
 
     /*
      * Slave binding methods
@@ -354,10 +409,17 @@ class IoSlave : public vp::SlavePort {
     // Can be called to reply to an IO request.
     // Replying means that the slave has finished handing the request and it is now
     // owned back by the master which can then proceed with the request.
-    inline void resp(IoReq *req)
+    //
+    // Returns the consumer's IoRespAck: IO_RESP_ACCEPTED when it took the beat
+    // (ownership returns to the master) or IO_RESP_DENIED when it refused it this
+    // cycle (response-path back-pressure) — in which case the producer keeps
+    // ownership, must hold the beat unchanged, and re-send it when the consumer
+    // later calls IoMaster::resp_retry(). A consumer that always accepts simply
+    // returns IO_RESP_ACCEPTED.
+    inline IoRespAck resp(IoReq *req)
     {
         IoMasterRespMeth *meth = (IoMasterRespMeth *)this->master_resp_meth;
-        meth((vp::Block *)this->get_remote_context(), req);
+        return meth((vp::Block *)this->get_remote_context(), req);
     }
 
     /*
@@ -381,6 +443,11 @@ class IoSlave : public vp::SlavePort {
     // This is set to an empty callback by default.
     void *req_meth;
 
+    // Response-retry callback set by the user (optional). Invoked when the bound
+    // master calls IoMaster::resp_retry() to announce it can accept responses
+    // again. NULL when this producer never expects its responses to be denied.
+    void *resp_retry_meth;
+
     /*
      * Master callbacks
      */
@@ -403,7 +470,7 @@ class IoSlave : public vp::SlavePort {
     // This is a stub setup when the slave is multiplexing the port so that we
     // can capture the master call and transform it into the slave call with the
     // right mux ID.
-    static inline void resp_muxed_stub(IoSlave *_this, IoReq *req);
+    static inline IoRespAck resp_muxed_stub(IoSlave *_this, IoReq *req);
 
     /*
      * Internal data
@@ -444,6 +511,17 @@ inline IoReqStatus IoMaster::req(IoReq *req)
     return meth((vp::Block *)this->get_remote_context(), req);
 }
 
+inline void IoMaster::resp_retry(IoRetryChannel channel)
+{
+    // Only valid against a producer that registered a resp_retry_meth — i.e. one
+    // that can be denied. A master that denies a resp() must be bound to such a
+    // producer, otherwise the held beat could never be re-sent.
+    vp_assert(this->slave_resp_retry_meth != NULL, this->get_owner()->get_trace(),
+        "resp_retry() on a slave that did not register a resp_retry_meth\n");
+    IoSlaveRespRetryMeth *meth = (IoSlaveRespRetryMeth *)this->slave_resp_retry_meth;
+    meth((vp::Block *)this->get_remote_context(), channel);
+}
+
 inline void IoMaster::bind_to(vp::Port *_port, js::Config *config) {
     IoSlave *port = (IoSlave *)_port;
     this->remote_port = port;
@@ -455,6 +533,7 @@ inline void IoMaster::bind_to(vp::Port *_port, js::Config *config) {
         // Normal binding, just register the method and context into the master
         // port for fast access
         this->slave_req_meth = port->req_meth;
+        this->slave_resp_retry_meth = port->resp_retry_meth;
         this->set_remote_context(port->get_context());
     }
     else
@@ -463,6 +542,20 @@ inline void IoMaster::bind_to(vp::Port *_port, js::Config *config) {
         // the stub to insert the multiplex ID.
         this->slave_req_meth_for_mux = port->req_meth;
         this->slave_req_meth = (void *)&IoMaster::req_muxed_stub;
+
+        // Same for the response-retry signal — only route through the stub when
+        // the producer registered a muxed resp_retry handler; otherwise leave it
+        // NULL so the resp_retry() assert fires on misuse instead of calling a
+        // stub with a NULL underlying handler.
+        if (port->resp_retry_meth != NULL)
+        {
+            this->slave_resp_retry_meth_for_mux = port->resp_retry_meth;
+            this->slave_resp_retry_meth = (void *)&IoMaster::resp_retry_muxed_stub;
+        }
+        else
+        {
+            this->slave_resp_retry_meth = NULL;
+        }
 
         this->set_remote_context(this);
         this->slave_context_for_mux = (vp::Block *)port->get_context();
@@ -480,17 +573,27 @@ inline IoReqStatus IoMaster::req_muxed_stub(IoMaster *_this, IoReq *req)
     return meth((vp::Block *)_this->slave_context_for_mux, req, _this->slave_mux_id);
 }
 
+inline void IoMaster::resp_retry_muxed_stub(IoMaster *_this, IoRetryChannel channel)
+{
+    // Same pattern as req_muxed_stub but for the response-retry signal: inject
+    // the slave mux ID on the way to the muxed resp_retry handler.
+    IoSlaveRespRetryMethMuxed *meth =
+        (IoSlaveRespRetryMethMuxed *)_this->slave_resp_retry_meth_for_mux;
+    meth((vp::Block *)_this->slave_context_for_mux, _this->slave_mux_id, channel);
+}
+
 inline void IoMaster::finalize()
 {
 }
 
-inline IoSlave::IoSlave(IoSlaveReqMeth *meth)
-: req_meth((void *)meth)
+inline IoSlave::IoSlave(IoSlaveReqMeth *meth, IoSlaveRespRetryMeth *resp_retry_meth)
+: req_meth((void *)meth), resp_retry_meth((void *)resp_retry_meth)
 {
 }
 
-inline IoSlave::IoSlave(int id, IoSlaveReqMethMuxed *meth)
-: mux_id(id), req_meth((void *)meth)
+inline IoSlave::IoSlave(int id, IoSlaveReqMethMuxed *meth,
+                        IoSlaveRespRetryMethMuxed *resp_retry_meth)
+: req_meth((void *)meth), resp_retry_meth((void *)resp_retry_meth), mux_id(id)
 {
 }
 
@@ -501,11 +604,11 @@ inline void IoSlave::retry_muxed_stub(IoSlave *_this, IoRetryChannel channel) {
     meth((vp::Block *)_this->master_context_for_mux, _this->master_mux_id, channel);
 }
 
-inline void IoSlave::resp_muxed_stub(IoSlave *_this, IoReq *req) {
+inline IoRespAck IoSlave::resp_muxed_stub(IoSlave *_this, IoReq *req) {
     // The normal callback was tweaked in order to get there when the master is sending a
     // request. Now generate the normal call with the mux ID using the saved handler
     IoMasterRespMethMuxed *meth = (IoMasterRespMethMuxed *)_this->master_resp_meth_for_mux;
-    meth((vp::Block *)_this->master_context_for_mux, req, _this->master_mux_id);
+    return meth((vp::Block *)_this->master_context_for_mux, req, _this->master_mux_id);
 }
 
 inline void IoSlave::bind_to(vp::Port *_port, js::Config *config) {

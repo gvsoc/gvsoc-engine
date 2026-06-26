@@ -166,19 +166,24 @@ construction time — there are no ``set_*_meth`` setters):
 
 .. code-block:: cpp
 
-    static void retry(vp::Block *__this);
-    static void resp (vp::Block *__this, vp::IoReq *req);
+    static void        retry(vp::Block *__this);
+    static vp::IoRespAck resp(vp::Block *__this, vp::IoReq *req);
 
     vp::IoMaster out{ &MyComp::retry, &MyComp::resp };
     new_master_port("output", &out, this);   // bind via vp::Component
+
+The ``resp`` callback returns :cpp:enum:`vp::IoRespAck`
+(``IO_RESP_ACCEPTED`` / ``IO_RESP_DENIED``) — see `Response-path
+back-pressure`_. A consumer that always accepts just
+``return vp::IO_RESP_ACCEPTED;``.
 
 The muxed form lets one master serve several slaves via per-call
 dispatch:
 
 .. code-block:: cpp
 
-    static void retry_muxed(vp::Block *__this, int id);
-    static void resp_muxed (vp::Block *__this, vp::IoReq *req, int id);
+    static void        retry_muxed(vp::Block *__this, int id);
+    static vp::IoRespAck resp_muxed(vp::Block *__this, vp::IoReq *req, int id);
 
     vp::IoMaster out_i{ i, &MyComp::retry_muxed, &MyComp::resp_muxed };
 
@@ -480,6 +485,90 @@ Unlike v1, a slave cannot enqueue multiple denied requests and
 N pending requests should accept them (``GRANTED``) and respond
 later, not deny them.
 
+Response-path back-pressure
+---------------------------
+
+The request path has flow control (``req()`` returns ``DENIED`` and
+the slave later signals ``retry()``); the response path has the
+symmetric mechanism, the AXI ``R``/``RREADY`` analogue. The producer
+of a response (a slave, an adapter, a router forwarding upstream)
+replies with ``in.resp(req)``. The **consumer's** ``resp`` callback
+**returns** an :cpp:enum:`vp::IoRespAck`: ``IO_RESP_ACCEPTED`` to take
+the beat, or ``IO_RESP_DENIED`` to refuse it for the current cycle.
+``in.resp(req)`` propagates that value to the producer; on
+``IO_RESP_DENIED`` the producer must hold the beat unchanged and
+re-send it when the consumer later calls ``out.resp_retry()``.
+
+``IoRespAck`` is the response-path analogue of
+:cpp:enum:`vp::IoReqStatus` (a response is terminal, so it has only the
+two outcomes, no ``GRANTED``). It is kept separate from
+``IoRespStatus`` — the ``OK`` / ``INVALID`` payload status on
+``req->status`` — which is an orthogonal axis a beat carries regardless
+of whether it was accepted.
+
+This is a real return value on the callback, symmetric with ``req()``
+(whose callback returns ``IoReqStatus``): the ``resp`` callback
+signature is ``vp::IoRespAck NAME(vp::Block *, vp::IoReq *)`` (muxed:
+``..., int id``). A consumer that always accepts simply
+``return vp::IO_RESP_ACCEPTED;`` and no producer ever needs a
+``resp_retry`` handler — the whole mechanism is free when unused. A
+forwarding mid-box propagates a downstream consumer's verdict by
+returning the inner ``resp()`` result directly
+(``return in.resp(req);``).
+
+``resp_retry()`` is the response-direction mirror of ``retry()``:
+
+- ``retry()`` — slave method, fires the **master's** retry callback,
+  meaning "my request input is ready again".
+- ``resp_retry()`` — master method, fires the **slave's**
+  ``resp_retry`` callback, meaning "my response input is ready again".
+
+It carries the same :cpp:enum:`vp::IoRetryChannel` and obeys the same
+**synchronous re-send** rule: the producer re-submits its held beat
+inside the ``resp_retry`` callback, same cycle, never deferred.
+
+A producer that can be denied registers a ``resp_retry`` handler as
+the optional second argument of the ``IoSlave`` constructor
+(``vp::IoSlave in{ &MyComp::req, &MyComp::resp_retry }``); it defaults
+to ``nullptr`` for the common always-accepted case.
+
+.. code-block:: cpp
+
+    // Consumer side — the resp callback returns its accept/deny verdict.
+    vp::IoRespAck MyComp::resp(vp::Block *__this, vp::IoReq *req)
+    {
+        auto *_this = (MyComp *)__this;
+        if (!_this->resp_channel_free_this_cycle())
+        {
+            _this->owe_resp_retry = true;
+            return vp::IO_RESP_DENIED;        // hold off — producer keeps the beat
+        }
+        _this->accept(req);
+        return vp::IO_RESP_ACCEPTED;
+    }
+
+    // ...later, when the consumer's response channel frees:
+    if (this->owe_resp_retry) { this->owe_resp_retry = false; this->out.resp_retry(); }
+
+    // Producer side — hold the denied beat and re-send synchronously.
+    if (this->in.resp(beat) == vp::IO_RESP_DENIED)
+    {
+        this->held_beat = beat;       // keep it unchanged
+    }
+    static void resp_retry(vp::Block *__this, vp::IoRetryChannel)
+    {
+        auto *_this = (MyComp *)__this;
+        if (_this->held_beat && _this->in.resp(_this->held_beat) != vp::IO_RESP_DENIED)
+            _this->held_beat = nullptr;
+    }
+
+``interco/router_v2`` (the ``beat`` flavour) is the reference
+consumer: it arbitrates each input's response channel to **one beat
+per cycle**, back-pressuring the losing output (its downstream
+``io_v2_beat_adapter`` holds the beat) instead of forwarding more than
+one response beat to a master in the same cycle. The general and
+sync beat adapters are the reference producers.
+
 Burst protocol
 --------------
 
@@ -677,7 +766,7 @@ required to set on the cumulative-final response):
 
 .. code-block:: cpp
 
-    static void resp(vp::Block *__this, vp::IoReq *req)
+    static vp::IoRespAck resp(vp::Block *__this, vp::IoReq *req)
     {
         auto *_this = (MyMaster *)__this;
         auto *info  = (BurstInfo *)req->initiator;
@@ -692,6 +781,7 @@ required to set on the cumulative-final response):
             delete info;
             delete req;
         }
+        return vp::IO_RESP_ACCEPTED;   // this master never back-pressures
     }
 
 If the master *needs* a per-beat callback stream (e.g. a beat-rate
