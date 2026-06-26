@@ -79,9 +79,13 @@ class Proxy(object):
                 try:
                     while True:
                         byte = self.socket.recv(1).decode('utf-8')
-                        # if not byte:
-                        #     self.__quit(-1)
-                        #     return
+                        if not byte:
+                            # EOF: the peer closed the connection (the engine shuts its session
+                            # socket down once the simulation is over). Exit the thread instead of
+                            # busy-spinning on empty recv()s. The exit notification has already been
+                            # processed by this point in the normal teardown flow, so sim_has_exited
+                            # is set and waiters (join()) have been released.
+                            return
                         # Stop at the line terminator without keeping it: it is not part of any
                         # field value. Otherwise the last field (e.g. the clock_selected= path)
                         # carries a trailing '\n' and string comparisons against it fail.
@@ -313,7 +317,15 @@ class Proxy(object):
 
         This will free resources and close threads so that simulation can properly exit.
         """
-        self.socket.shutdown(socket.SHUT_RDWR)
+        # The engine tears down its session socket as soon as the simulation finishes (right after
+        # sending the exit notification that unblocks join()). It then races with this call: if the
+        # peer already shut the connection down, the socket is no longer connected and shutdown()
+        # raises ENOTCONN. That just means the connection is already gone, which is what we want, so
+        # swallow it (and any other shutdown error on an already-dead socket).
+        try:
+            self.socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.socket.close()
         self.reader.join()
 
