@@ -294,6 +294,12 @@ void gv::ControllerClient::vcd_bind(gv::Vcd_user *user)
     gv::Controller::get().vcd_bind(user, this);
 }
 
+void gv::ControllerClient::stdout_bind(gv::Stdout_user *user)
+{
+    this->logger.info("Stdout bind (user: %p)\n", user);
+    gv::Controller::get().stdout_bind(user, this);
+}
+
 void gv::ControllerClient::vcd_enable()
 {
     this->logger.info("VCD enable\n");

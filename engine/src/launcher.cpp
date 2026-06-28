@@ -23,6 +23,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <algorithm>
+#include <cstdio>
 
 #include <stdexcept>
 #include <vp/vp.hpp>
@@ -857,6 +858,25 @@ void gv::Controller::vcd_bind(gv::Vcd_user *user, ControllerClient *client)
     // Remember the user so that it can be bound again to the new trace engine on restart
     this->vcd_user = user;
     this->instance->traces.get_trace_engine()->set_vcd_user(user);
+}
+
+void gv::Controller::stdout_bind(gv::Stdout_user *user, ControllerClient *client)
+{
+    this->stdout_user = user;
+}
+
+void gv::Controller::stdout_dump(int64_t timestamp, const std::string &path, const char *data,
+    int size)
+{
+    // Always echo to the host terminal so the launching console / CI keep seeing the output.
+    fwrite(data, 1, size, stdout);
+    fflush(stdout);
+
+    // Additionally deliver to a bound consumer (e.g. the GUI output panel), if any.
+    if (this->stdout_user)
+    {
+        this->stdout_user->stdout_dump(timestamp, path, data, size);
+    }
 }
 
 void gv::Controller::vcd_enable(ControllerClient *client)

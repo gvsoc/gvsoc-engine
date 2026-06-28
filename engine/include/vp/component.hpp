@@ -211,6 +211,19 @@ namespace vp
          */
         gv::Controller *get_launcher();
 
+        /**
+         * Emit simulated-software console output from this component.
+         *
+         * Forwards the bytes to the launcher's always-on console channel, tagged with the current
+         * simulation time and this component's hierarchical path. Used by models that implement a
+         * putchar / write peripheral (semi-hosting, MMIO putchar, ...). Independent of the
+         * trace/VCD system, so it is never compiled out in optimized builds.
+         *
+         * @param data The bytes to emit (not null-terminated).
+         * @param size Number of bytes in data.
+         */
+        void stdout_write(const char *data, int size);
+
     private:
         /*
          * Private members accessed by other classes of the framework

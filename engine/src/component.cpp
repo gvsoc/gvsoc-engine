@@ -374,6 +374,22 @@ gv::Controller *vp::Component::get_launcher()
     return this->launcher;
 }
 
+void vp::Component::stdout_write(const char *data, int size)
+{
+    gv::Controller *launcher = this->get_launcher();
+    if (launcher)
+    {
+        launcher->stdout_dump(this->time.get_time(), this->get_path(), data, size);
+    }
+    else
+    {
+        // No launcher reachable (should not happen for built components): fall back to host stdout
+        // so output is never silently dropped.
+        fwrite(data, 1, size, stdout);
+        fflush(stdout);
+    }
+}
+
 
 void vp::Component::reset_sync(vp::Block *__this, bool active)
 {

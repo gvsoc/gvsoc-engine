@@ -165,6 +165,12 @@ namespace gv {
         gv::Wire_binding *wire_bind(gv::Wire_user *user, std::string comp_name, std::string itf_name, ControllerClient *client);
 
         void vcd_bind(gv::Vcd_user *user, ControllerClient *client);
+        // Bind a user controller to receive simulated-software console output.
+        void stdout_bind(gv::Stdout_user *user, ControllerClient *client);
+        // Forward a chunk of console output: always echoed to host stdout (so the launching
+        // terminal / CI keep working), and additionally delivered to the bound Stdout_user, if any.
+        // Reached by models through comp->get_launcher() (see declare_binary note above).
+        void stdout_dump(int64_t timestamp, const std::string &path, const char *data, int size);
         void vcd_enable(ControllerClient *client);
         void vcd_disable(ControllerClient *client);
         int event_subscribe(std::string pattern,
@@ -230,6 +236,9 @@ namespace gv {
         // User notified about VCD events. Remembered so that it can be bound again to the new
         // trace engine on restart.
         gv::Vcd_user *vcd_user = NULL;
+        // User notified about simulated-software console output. Persists across restart since it is
+        // owned by the controller, not the trace engine.
+        gv::Stdout_user *stdout_user = NULL;
         // Tell if main controller is asynchronous
         bool is_async;
         // True when the configuration contains SystemC components. In this case the engine
@@ -315,6 +324,7 @@ namespace gv {
         gv::Io_binding *io_bind(gv::Io_user *user, std::string comp_name, std::string itf_name) override;
         gv::Wire_binding *wire_bind(gv::Wire_user *user, std::string comp_name, std::string itf_name) override;
         void vcd_bind(gv::Vcd_user *user) override;
+        void stdout_bind(gv::Stdout_user *user) override;
         void vcd_enable() override;
         void vcd_disable() override;
         int event_subscribe(std::string pattern,

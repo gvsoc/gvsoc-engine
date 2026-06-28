@@ -385,6 +385,30 @@ namespace gv {
 
 
     /**
+     * Class required for receiving simulated-software console output.
+     *
+     * The external C++ (e.g. the GUI) implements this to receive the bytes
+     * the simulated software prints (semi-hosting writes, MMIO putchar, ...).
+     * Unlike the VCD/trace channel, this is always active regardless of build
+     * optimization level, so console output is never compiled out.
+     */
+    class Stdout_user
+    {
+    public:
+        /**
+         * Called by GVSOC whenever a model emits console output.
+         *
+         * @param timestamp Simulation time of the output in picoseconds.
+         * @param path Hierarchical path of the emitting component.
+         * @param data The emitted bytes (not null-terminated).
+         * @param size Number of bytes in data.
+         */
+        virtual void stdout_dump(int64_t timestamp, std::string path,
+            const char *data, int size) {}
+    };
+
+
+    /**
      * GVSOC interface for VCD events
      *
      * Gather all the methods which can be called to bind the simulated system with external C++ code
@@ -448,6 +472,25 @@ namespace gv {
          */
         virtual int event_unsubscribe(std::string pattern,
             MatchKind kind = MatchKind::Exact) { return 0; }
+    };
+
+
+    /**
+     * GVSOC interface for simulated-software console output
+     *
+     * Bind external C++ code so it receives the bytes the simulated software
+     * prints. Always-on (independent of the trace/VCD system).
+     */
+    class Stdout
+    {
+    public:
+        /**
+         * Bind external C++ code to receive console output.
+         *
+         * @param user A pointer to the caller class instance which will be called for every chunk
+         *             of console output. This caller must implement class Stdout_user.
+         */
+        virtual void stdout_bind(Stdout_user *user) {}
     };
 
 
@@ -672,7 +715,7 @@ namespace gv {
      *
      * Gather all the methods which can be called to control GVSOC execution and other features
      */
-    class Gvsoc : public Io, public Vcd, public Wire, public Power
+    class Gvsoc : public Io, public Vcd, public Wire, public Power, public Stdout
     {
     public:
 
