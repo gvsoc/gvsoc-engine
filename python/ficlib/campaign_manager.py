@@ -11,11 +11,10 @@ import shutil
 import random
 import subprocess
 import signal
-import ficlib.fic_proxy_helpers as helpers
-import ficlib.poi_helpers as poi_helpers
-
-from ficlib.fault_helpers import *
 from dataclasses import dataclass
+from . import fic_proxy_helpers as helpers
+from . import poi_helpers
+from .fault_helpers import *
 
 # We hash if the size is larger than this
 # Leave it at that for now!
