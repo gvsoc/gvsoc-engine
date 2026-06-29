@@ -600,12 +600,20 @@ For any single ``req()`` the slave may pick:
    ``in.resp(req)`` **once**, later, with the whole payload
    (``is_first = is_last = true``, ``size`` unchanged).
 
-3. **Beat stream.** Return ``IO_REQ_GRANTED``, then call
-   ``in.resp(req)`` ``N`` times on the **same** ``IoReq`` object,
-   mutating ``data`` / ``size`` / ``is_first`` / ``is_last``
-   between calls. Cumulative response sizes must equal the
-   request's ``size``; the final beat carries ``is_last = true``
-   and the burst's final ``IO_RESP_OK`` / ``IO_RESP_INVALID``.
+3. **Beat stream.** Return ``IO_REQ_GRANTED``, then call ``in.resp(...)``
+   ``N`` times, once per beat, with ``data`` / ``size`` / ``is_first`` /
+   ``is_last`` set per beat. Cumulative response sizes must equal the
+   request's ``size``; the final beat carries ``is_last = true`` and the
+   burst's final ``IO_RESP_OK`` / ``IO_RESP_INVALID``.
+
+   Under the **initiator-owned request convention** (which all in-tree
+   io_v2 models and adapters follow) a multi-beat read MUST deliver each
+   beat as a **distinct** response object — not the request reused — so the
+   initiator can keep owning its request and free each beat as it is
+   consumed. Correlation back to per-request state is via ``req->initiator``,
+   copied onto every beat, not via object identity. Reusing the request
+   object for response beats (the bare-protocol shorthand) is discouraged:
+   it breaks any master that keeps using its request across the beats.
 
 All three are valid and masters must tolerate any of them.
 Diagrammatically, the three shapes look like this:
@@ -877,11 +885,11 @@ the slave side never triggers insertion. Four signatures exist
      - Cycle-accurate consumer that wants **one** ``resp()`` per beat
        regardless of the slave's form. ``beat_width`` must match a beat
        peer; differing widths are a design error, not a missing adapter.
-     - vs an ``IoV2Sync`` slave → ``IoV2BeatSyncAdapter``; vs any other
-       non-beat slave (``IoV2BigPacket`` / ``IoV2SingleReq`` / legacy) →
-       ``IoV2BeatAdapter``
+     - vs an ``IoV2Sync`` slave → ``IoV2BeatToSyncAdapter``; vs an
+       ``IoV2SingleReq`` slave → ``IoV2BeatToSingleReqAdapter``; vs an
+       ``IoV2BigPacket`` / legacy slave → ``IoV2BeatAdapter``
 
-The three adapters below are auto-inserted from these rules. Start with the
+The adapters below are auto-inserted from these rules. Start with the
 beat adapter, which the cycle-accurate masters (``router_v2_beat``, the
 iDMA) rely on.
 
@@ -893,9 +901,10 @@ When a master wants to consume responses as a per-beat stream
 the outbound binding with a class-based :class:`gvsoc.signature.IoV2Beat`
 signature. The framework's binding pass auto-inserts a beat adapter
 between the master and the slave whenever the slave's signature is
-non-beat: ``IoV2BeatSyncAdapter`` for an ``IoV2Sync`` slave (the
-specialised inline case, below) and the general ``IoV2BeatAdapter`` for
-``IoV2BigPacket`` / ``IoV2SingleReq`` / the legacy ``'io_v2'`` string.
+non-beat: ``IoV2BeatToSyncAdapter`` for an ``IoV2Sync`` slave (the
+specialised inline case, below), ``IoV2BeatToSingleReqAdapter`` for an
+``IoV2SingleReq`` slave (the per-combination case, below) and the general
+``IoV2BeatAdapter`` for ``IoV2BigPacket`` / the legacy ``'io_v2'`` string.
 Either way the master sees a normal ``IoMaster``-shaped flow with one
 ``resp()`` per beat:
 
@@ -933,14 +942,18 @@ and the iDMA's ``idma_be_axi`` — see
 Two behaviours of the beat adapter are load-bearing for any master that
 uses it (both are stated as requirements and pitfalls further down):
 
-- **Request ownership.** A read burst is one request in, *N* beats out.
-  The adapter splits the read into beat-sized sub-reads it allocates and
-  frees itself, delivers each response beat as its **own** object that the
-  terminal master frees, and frees the master's original burst request on
-  the burst's last beat. The master must therefore hand the adapter a
-  **heap-allocated** request — never a pooled, embedded or borrowed object
-  — and never gets it back. Single-beat reads and writes round-trip the
-  master's own object as usual.
+- **Request ownership (initiator-owned convention).** A read burst is one
+  request in, *N* beats out. The adapter splits the read into beat-sized
+  sub-reads it allocates and frees itself, and delivers **every** read beat —
+  single- or multi-beat — as a **distinct** object that the terminal master
+  frees as it consumes it. The adapter **never** round-trips the master's read
+  request and **never** frees it: the initiator owns its request for the whole
+  transaction and frees it on the last response, correlating each beat back to
+  its per-request state via ``req->initiator`` (copied onto every beat), not by
+  object identity. A master that must get its own object back (a CPU LSU) is an
+  ``IoV2SingleReq`` master and sits behind an ``IoV2BeatCollapseAdapter`` that
+  round-trips for it. Writes still round-trip the master's own request as the
+  single ack.
 - **Sub-read pacing.** The adapter issues at most **one sub-read per
   cycle** (keeping up to ``max_sub_outstanding`` in flight). Issuing a
   whole burst's sub-reads in a single cycle would make a *series* of
@@ -950,7 +963,7 @@ uses it (both are stated as requirements and pitfalls further down):
 The beat-sync adapter
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-``IoV2BeatSyncAdapter`` is a dedicated specialisation of the beat adapter
+``IoV2BeatToSyncAdapter`` is a dedicated specialisation of the beat adapter
 for an ``IoV2Sync`` slave, auto-inserted in its place for that one case.
 Because a sync slave serves *any* size inline and always replies
 ``IO_REQ_DONE`` (never ``GRANTED`` / ``DENIED``), the adapter does not need
@@ -966,8 +979,60 @@ last beat landing at ``now + get_full_latency()``, and the same ownership
 rules (the master hands over a **heap** burst request for a multi-beat
 read, freed on the last beat; each read beat is its own object the master
 frees). Source:
-``gvsoc/core/models/utils/io_v2_beat_sync_adapter.{hpp,cpp}``; the
-``utils/io_v2_beat_sync_adapter`` test is a standalone exerciser.
+``gvsoc/core/models/utils/io_v2_beat_to_sync_adapter.{hpp,cpp}``; the
+``utils/io_v2_beat_to_sync_adapter`` test is a standalone exerciser.
+
+The beat-single-req adapter
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``IoV2BeatToSingleReqAdapter`` is the per-combination adapter for an
+``IoV2SingleReq`` slave, auto-inserted in place of the general adapter for
+that one case. Unlike a sync slave, a single-req slave is **not**
+inline-only: it answers each request with a single-beat response in any of
+three forms — inline ``IO_REQ_DONE``, async ``IO_REQ_GRANTED`` + one
+``resp()``, or ``IO_REQ_DENIED`` + ``retry()`` — so the adapter keeps the
+read sub-read pipeline (beat-sized sub-reads paced one per cycle), the
+async/deny machinery and request- and response-path back-pressure.
+
+Two further ways it follows the HW ``axi2mem`` bridge it models rather than
+the general adapter:
+
+* **On-the-fly burst generation.** An incoming read burst is pushed whole
+  onto a queue; each beat-sized sub-read is generated from the front burst's
+  cursor when it is issued (one per cycle) — nothing is pre-expanded, exactly
+  like the HW address generator (base address + counter).
+* **Bounded read bursts in flight.** ``max_read_bursts`` (config-tree field,
+  default 4 — the HW r_id-FIFO depth) caps the read bursts accepted but not
+  yet fully delivered. Beyond it the read request channel is back-pressured
+  (``IO_REQ_DENIED``); ``in.retry()`` is raised when a burst completes and
+  frees a slot. The master then re-sends the held read.
+
+What it drops, relative to the general adapter, is the **out-of-order
+reassembly**: a single-req slave answers in request order (a valid burst
+maps to one output, and the response returns on the very object sent), so
+the adapter just tracks issued sub-reads in an **in-order FIFO**, pops them
+as responses arrive, and forwards the **same** sub-read object straight
+upstream as the beat (no searchable reorder buffer, no second per-beat
+allocation). The in-order assumption is **checked** with ``traces.assert``
+(asserts/debug builds): a response that is not the oldest outstanding
+sub-read aborts the run rather than scrambling the beat stream. The SingleReq
+single-beat-response contract (one response per forwarded request, covering
+its whole size) is checked the same way.
+
+Parameters (``beat_width``, ``max_read_bursts``) are read from the generated
+config tree (the ``IoV2BeatToSingleReqAdapterConfig`` dataclass in the Python
+generator → ``Component(config, cfg)`` on the C++ side), not from the raw
+JSON config.
+
+This is the calibrated path for the iDMA's ``o_AXI_READ`` / ``o_AXI_WRITE``
+bound to a ``KIND_BANDWIDTH`` router (``IoV2SingleReq``); its cycle-tolerance
+checkers pin the timing, which is unchanged by the in-order simplification
+(the pacing and latency modelling are untouched). Source:
+``gvsoc/core/models/utils/io_v2_beat_to_single_req_adapter.{hpp,cpp}``; the
+``utils/io_v2_beat_to_single_req_adapter`` test is a standalone exerciser
+covering inline / async / request-deny / response-back-pressure, the
+read-burst limit, and a negative out-of-order case that trips the in-order
+assert.
 
 The collapse adapter
 ~~~~~~~~~~~~~~~~~~~~~

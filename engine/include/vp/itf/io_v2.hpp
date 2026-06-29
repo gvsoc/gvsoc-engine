@@ -27,11 +27,15 @@
 //   2. Async big-packet:  slave returns IO_REQ_GRANTED, later calls resp() once
 //                         with is_first = is_last = true and the full size.
 //   3. Beat stream:       slave returns IO_REQ_GRANTED, later calls resp() N
-//                         times reusing the same IoReq object, mutating data,
-//                         size, is_first and is_last between calls. Cumulative
-//                         response sizes equal request size. burst_id is
-//                         preserved across the beats. Final beat carries
-//                         is_last = true and the burst's final status.
+//                         times, once per beat (data, size, is_first, is_last
+//                         set per beat). Cumulative response sizes equal request
+//                         size. burst_id is preserved across the beats. Final
+//                         beat carries is_last = true and the burst's final
+//                         status. Under the initiator-owned request convention
+//                         each read beat is a DISTINCT object correlated by
+//                         req->initiator (the request is never reused as a
+//                         response beat); reusing one object is bare-protocol-
+//                         legal but breaks initiator-owned masters.
 //
 // DENIED / retry: when a slave returns IO_REQ_DENIED the master holds the
 // request and re-sends it when the slave later calls retry(). The re-send MUST
