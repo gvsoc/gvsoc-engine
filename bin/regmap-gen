@@ -61,6 +61,12 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--header-headers", dest="header_headers", default=None,
+    help="Comma-separated list of header variants to generate (e.g. regfields,gvsoc). "
+         "When omitted, all variants are generated"
+)
+
+parser.add_argument(
     "--rst", dest="rst", default=None,
     help="Dump register map into an rst file"
 )
@@ -139,7 +145,8 @@ if args.json:
     regmap.regmap_json.dump_to_json(regmap=rmap, name=args.name, json_path=args.json)
 
 if args.header:
-    regmap.regmap_c_header.dump_to_header(regmap=rmap, name=args.name, header_path=args.header)
+    header_headers = args.header_headers.split(',') if args.header_headers is not None else None
+    regmap.regmap_c_header.dump_to_header(regmap=rmap, name=args.name, header_path=args.header, headers=header_headers)
 
 if args.ipxact:
     regmap.regmap_ipxact.dump_to_ipxact(regmap=rmap, filename=args.ipxact)

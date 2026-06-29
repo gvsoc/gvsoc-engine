@@ -22,6 +22,7 @@
 #include "vp/vp.hpp"
 #include "vp/trace/trace.hpp"
 #include "vp/trace/trace_engine.hpp"
+#include "vp/register.hpp"
 #include <string.h>
 #include <inttypes.h>
 
@@ -41,6 +42,19 @@ void vp::BlockTrace::reg_trace(Trace *trace, int event)
 {
     this->get_trace_engine()->reg_trace(trace, event, top.get_path(), trace->get_name());
 }
+
+#ifdef VP_ASSERT_ACTIVE
+void vp::BlockTrace::assert(bool cond, const char *fmt, ...)
+{
+    if (!cond)
+    {
+        va_list ap;
+        va_start(ap, fmt);
+        this->top.get_trace()->assert_fail(fmt, ap);
+        va_end(ap);
+    }
+}
+#endif
 
 void vp::BlockTrace::new_trace(std::string name, Trace *trace, TraceLevel level)
 {
@@ -197,6 +211,22 @@ void vp::Trace::dump_warning_header()
 void vp::Trace::dump_fatal_header()
 {
     fprintf(this->trace_file, "[\033[31m%s\033[0m] ", path.c_str());
+}
+
+void vp::Trace::assert_fail(const char *fmt, va_list ap)
+{
+    // Emit the failure as a regular trace line (timestamp, cycle stamp and
+    // component path) so it is clear which instance triggered the assertion.
+    this->dump_header();
+    fprintf(this->trace_file, "\033[31massertion failed\033[0m");
+    if (fmt != NULL && fmt[0] != '\0')
+    {
+        fprintf(this->trace_file, ": ");
+        if (vfprintf(this->trace_file, fmt, ap) < 0) {}
+    }
+    fprintf(this->trace_file, "\n");
+    fflush(this->trace_file);
+    abort();
 }
 
 void vp::Trace::set_active(bool active)
@@ -521,6 +551,36 @@ uint8_t *vp::TraceEngine::parse_event(uint8_t *buffer, bool &unlock)
     return buffer;
 }
 
+std::string vp::TraceEngine::regfields_to_json(vp::Trace *trace)
+{
+    if (trace->regfields == NULL || trace->regfields->size() == 0)
+        return "";
+
+    std::string result = "{\"fields\":[";
+    bool first = true;
+    for (vp::regfield *field: *trace->regfields)
+    {
+        if (!first)
+            result += ",";
+        first = false;
+
+        // Escape the field name (regfield names are plain identifiers in
+        // practice, but stay safe against quotes/backslashes in the JSON).
+        std::string name;
+        for (char c: field->name)
+        {
+            if (c == '"' || c == '\\')
+                name += '\\';
+            name += c;
+        }
+
+        result += "{\"n\":\"" + name + "\",\"b\":" + std::to_string(field->bit) +
+            ",\"w\":" + std::to_string(field->width) + "}";
+    }
+    result += "]}";
+    return result;
+}
+
 void *vp::TraceEngine::event_enable_now(vp::Trace *trace, bool enabled)
 {
     // Mark a legacy vp::Trace enabled/disabled directly on the Vcd_user (e.g. the GUI), at the
@@ -541,7 +601,8 @@ void *vp::TraceEngine::event_enable_now(vp::Trace *trace, bool enabled)
                 trace->type == gv::Vcd_event_type_string ? 0 : trace->width;
     int64_t timestamp = trace->comp ? trace->comp->time.get_time() : 0;
 
-    void *handle = this->vcd_user->event_enable(trace->get_full_path(), trace->type, width, "",
+    void *handle = this->vcd_user->event_enable(trace->get_full_path(), trace->type, width,
+        vp::TraceEngine::regfields_to_json(trace),
         clock_trace_name, enabled, timestamp);
     if (enabled)
     {

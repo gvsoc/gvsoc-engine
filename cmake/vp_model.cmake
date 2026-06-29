@@ -8,7 +8,7 @@ function(vp_set_target_types)
     cmake_parse_arguments(
         VP_TARGET_TYPES
         ""
-        "BUILD_OPTIMIZED;BUILD_PROFILE;BUILD_DEBUG"
+        "BUILD_OPTIMIZED;BUILD_PROFILE;BUILD_DEBUG;BUILD_ASSERT"
         ""
         ${ARGN}
         )
@@ -20,6 +20,9 @@ function(vp_set_target_types)
     endif()
     if(${BUILD_DEBUG} AND NOT "_debug" IN_LIST VP_TARGET_TYPES)
         set(VP_TARGET_TYPES ${VP_TARGET_TYPES} "_debug" CACHE INTERNAL "")
+    endif()
+    if(${BUILD_ASSERT} AND NOT "_asserts" IN_LIST VP_TARGET_TYPES)
+        set(VP_TARGET_TYPES ${VP_TARGET_TYPES} "_asserts" CACHE INTERNAL "")
     endif()
     if(${BUILD_OPTIMIZED_M32} AND NOT "_optim_m32" IN_LIST VP_TARGET_TYPES)
         set(VP_TARGET_TYPES ${VP_TARGET_TYPES} "_optim_m32" CACHE INTERNAL "")
@@ -44,6 +47,7 @@ function(vp_block)
     set(VP_MODEL_NAME_OPTIM "${VP_MODEL_NAME}_optim")
     set(VP_MODEL_NAME_PROFILE "${VP_MODEL_NAME}_profile")
     set(VP_MODEL_NAME_DEBUG "${VP_MODEL_NAME}_debug")
+    set(VP_MODEL_NAME_ASSERTS "${VP_MODEL_NAME}_asserts")
     set(VP_MODEL_NAME_OPTIM_M32 "${VP_MODEL_NAME}_optim_m32")
     set(VP_MODEL_NAME_DEBUG_M32 "${VP_MODEL_NAME}_debug_m32")
 
@@ -76,6 +80,39 @@ function(vp_block)
             FILES $<TARGET_FILE:${VP_MODEL_NAME_OPTIM}>
             DESTINATION  "${GVSOC_MODELS_INSTALL_FOLDER}/${GVSOC_MODELS_OPTIM_INSTALL_FOLDER}/${VP_MODEL_PREFIX}"
             RENAME "${RENAME_OPTIM_NAME}${CMAKE_SHARED_LIBRARY_SUFFIX}"
+            )
+    endif()
+
+    # ==================
+    # Asserts models
+    # ==================
+    if(${BUILD_ASSERT})
+        add_library(${VP_MODEL_NAME_ASSERTS} STATIC ${VP_MODEL_SOURCES})
+        target_link_libraries(${VP_MODEL_NAME_ASSERTS} PRIVATE gvsoc_asserts)
+        set_target_properties(${VP_MODEL_NAME_ASSERTS} PROPERTIES PREFIX "")
+        target_compile_options(${VP_MODEL_NAME_ASSERTS} PRIVATE -fno-stack-protector -UNDEBUG -D__GVSOC__)
+        target_compile_definitions(${VP_MODEL_NAME_ASSERTS} PRIVATE -DVP_ASSERT_ACTIVE=1)
+
+        target_include_directories(${VP_MODEL_NAME_ASSERTS} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+        foreach(X IN LISTS GVSOC_MODULES)
+            target_include_directories(${VP_MODEL_NAME_ASSERTS} PRIVATE ${X})
+        endforeach()
+
+        foreach(subdir ${VP_MODEL_INCLUDES})
+            target_include_directories(${VP_MODEL_NAME_ASSERTS} PRIVATE ${subdir})
+        endforeach()
+
+        if(VP_MODEL_OUTPUT_NAME)
+            set(RENAME_ASSERTS_NAME ${VP_MODEL_OUTPUT_NAME})
+        else()
+            set(RENAME_ASSERTS_NAME ${VP_MODEL_NAME_ASSERTS})
+        endif()
+
+        install(
+            FILES $<TARGET_FILE:${VP_MODEL_NAME_ASSERTS}>
+            DESTINATION  "${GVSOC_MODELS_INSTALL_FOLDER}/${GVSOC_MODELS_ASSERT_INSTALL_FOLDER}/${VP_MODEL_PREFIX}"
+            RENAME "${RENAME_ASSERTS_NAME}${CMAKE_SHARED_LIBRARY_SUFFIX}"
             )
     endif()
 
@@ -116,9 +153,9 @@ function(vp_block)
         add_library(${VP_MODEL_NAME_PROFILE} STATIC ${VP_MODEL_SOURCES})
         target_link_libraries(${VP_MODEL_NAME_PROFILE} PRIVATE gvsoc_profile)
         set_target_properties(${VP_MODEL_NAME_PROFILE} PROPERTIES PREFIX "")
-        target_compile_options(${VP_MODEL_NAME_PROFILE} PRIVATE "-D__GVSOC__")
+        target_compile_options(${VP_MODEL_NAME_PROFILE} PRIVATE "-D__GVSOC__" -UNDEBUG)
         # TODO VP_TRACE_ACTIVE should be removed as soon as traces have been switch to events
-        target_compile_definitions(${VP_MODEL_NAME_PROFILE} PRIVATE -DGVSOC_CONFIG_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1)
+        target_compile_definitions(${VP_MODEL_NAME_PROFILE} PRIVATE -DGVSOC_CONFIG_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
 
         target_include_directories(${VP_MODEL_NAME_PROFILE} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -150,8 +187,8 @@ function(vp_block)
         add_library(${VP_MODEL_NAME_DEBUG} STATIC ${VP_MODEL_SOURCES})
         target_link_libraries(${VP_MODEL_NAME_DEBUG} PRIVATE gvsoc_debug)
         set_target_properties(${VP_MODEL_NAME_DEBUG} PROPERTIES PREFIX "")
-        target_compile_options(${VP_MODEL_NAME_DEBUG} PRIVATE "-D__GVSOC__")
-        target_compile_definitions(${VP_MODEL_NAME_DEBUG} PRIVATE -DGVSOC_CONFIG_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1)
+        target_compile_options(${VP_MODEL_NAME_DEBUG} PRIVATE "-D__GVSOC__" -UNDEBUG)
+        target_compile_definitions(${VP_MODEL_NAME_DEBUG} PRIVATE -DGVSOC_CONFIG_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
 
         target_include_directories(${VP_MODEL_NAME_DEBUG} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -181,9 +218,9 @@ function(vp_block)
         target_link_libraries(${VP_MODEL_NAME_DEBUG_M32} PRIVATE gvsoc_debug_m32)
         set_target_properties(${VP_MODEL_NAME_DEBUG_M32} PROPERTIES PREFIX "")
         target_compile_options(${VP_MODEL_NAME_DEBUG_M32} PRIVATE "-D__GVSOC__")
-        target_compile_options(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -m32 -D__M32_MODE__=1)
+        target_compile_options(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -m32 -D__M32_MODE__=1 -UNDEBUG)
         target_link_options(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -m32)
-        target_compile_definitions(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -DGVSOC_CONFIG_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1)
+        target_compile_definitions(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -DGVSOC_CONFIG_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
 
         target_include_directories(${VP_MODEL_NAME_DEBUG_M32} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -247,6 +284,7 @@ function(vp_model)
         set(VP_MODEL_NAME_OPTIM "${VP_MODEL_NAME}_optim")
         set(VP_MODEL_NAME_PROFILE "${VP_MODEL_NAME}_profile")
         set(VP_MODEL_NAME_DEBUG "${VP_MODEL_NAME}_debug")
+        set(VP_MODEL_NAME_ASSERTS "${VP_MODEL_NAME}_asserts")
         set(VP_MODEL_NAME_OPTIM_M32 "${VP_MODEL_NAME}_optim_m32")
         set(VP_MODEL_NAME_DEBUG_M32 "${VP_MODEL_NAME}_debug_m32")
 
@@ -281,6 +319,41 @@ function(vp_model)
                 FILES $<TARGET_FILE:${VP_MODEL_NAME_OPTIM}>
                 DESTINATION  "${GVSOC_MODELS_INSTALL_FOLDER}/${GVSOC_MODELS_OPTIM_INSTALL_FOLDER}/${VP_MODEL_DIRECTORY}"
                 RENAME "${RENAME_OPTIM_NAME}${CMAKE_SHARED_LIBRARY_SUFFIX}"
+                )
+        endif()
+
+        # ==================
+        # Asserts models
+        # ==================
+        if(${BUILD_ASSERT})
+            add_library(${VP_MODEL_NAME_ASSERTS} MODULE ${VP_MODEL_SOURCES})
+            target_link_libraries(${VP_MODEL_NAME_ASSERTS} PRIVATE gvsoc_asserts)
+            set_target_properties(${VP_MODEL_NAME_ASSERTS} PROPERTIES PREFIX "")
+            target_compile_options(${VP_MODEL_NAME_ASSERTS} PRIVATE -fno-stack-protector -UNDEBUG -D__GVSOC__)
+            target_compile_definitions(${VP_MODEL_NAME_ASSERTS} PRIVATE -DVP_ASSERT_ACTIVE=1)
+            target_include_directories(${VP_MODEL_NAME_ASSERTS} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+            foreach(X IN LISTS GVSOC_MODULES)
+                target_include_directories(${VP_MODEL_NAME_ASSERTS} PRIVATE ${X})
+            endforeach()
+
+            foreach(subdir ${VP_MODEL_INCLUDES})
+                target_include_directories(${VP_MODEL_NAME_ASSERTS} PRIVATE ${subdir})
+            endforeach()
+
+            if(DEFINED ENV{SYSTEMC_HOME})
+                target_include_directories(${VP_MODEL_NAME_ASSERTS} PRIVATE $ENV{SYSTEMC_HOME}/include)
+            endif()
+
+            if(VP_MODEL_OUTPUT_NAME)
+                set(RENAME_ASSERTS_NAME ${VP_MODEL_OUTPUT_NAME})
+            else()
+                set(RENAME_ASSERTS_NAME ${VP_MODEL_FILENAME})
+            endif()
+
+            install(
+                FILES $<TARGET_FILE:${VP_MODEL_NAME_ASSERTS}>
+                DESTINATION  "${GVSOC_MODELS_INSTALL_FOLDER}/${GVSOC_MODELS_ASSERT_INSTALL_FOLDER}/${VP_MODEL_DIRECTORY}"
+                RENAME "${RENAME_ASSERTS_NAME}${CMAKE_SHARED_LIBRARY_SUFFIX}"
                 )
         endif()
 
@@ -320,9 +393,9 @@ function(vp_model)
             add_library(${VP_MODEL_NAME_PROFILE} MODULE ${VP_MODEL_SOURCES})
             target_link_libraries(${VP_MODEL_NAME_PROFILE} PRIVATE gvsoc_profile)
             set_target_properties(${VP_MODEL_NAME_PROFILE} PROPERTIES PREFIX "")
-            target_compile_options(${VP_MODEL_NAME_PROFILE} PRIVATE -fno-stack-protector -D__GVSOC__)
+            target_compile_options(${VP_MODEL_NAME_PROFILE} PRIVATE -fno-stack-protector -D__GVSOC__ -UNDEBUG)
             # TODO VP_TRACE_ACTIVE should be removed as soon as traces have been switch to events
-            target_compile_definitions(${VP_MODEL_NAME_PROFILE} PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1)
+            target_compile_definitions(${VP_MODEL_NAME_PROFILE} PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
             target_include_directories(${VP_MODEL_NAME_PROFILE} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
             foreach(X IN LISTS GVSOC_MODULES)
                 target_include_directories(${VP_MODEL_NAME_PROFILE} PRIVATE ${X})
@@ -356,8 +429,8 @@ function(vp_model)
             add_library(${VP_MODEL_NAME_DEBUG} MODULE ${VP_MODEL_SOURCES})
             target_link_libraries(${VP_MODEL_NAME_DEBUG} PRIVATE gvsoc_debug)
             set_target_properties(${VP_MODEL_NAME_DEBUG} PROPERTIES PREFIX "")
-            target_compile_options(${VP_MODEL_NAME_DEBUG} PRIVATE "-D__GVSOC__")
-            target_compile_definitions(${VP_MODEL_NAME_DEBUG} PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1)
+            target_compile_options(${VP_MODEL_NAME_DEBUG} PRIVATE "-D__GVSOC__" -UNDEBUG)
+            target_compile_definitions(${VP_MODEL_NAME_DEBUG} PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
             target_include_directories(${VP_MODEL_NAME_DEBUG} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
             foreach(X IN LISTS GVSOC_MODULES)
                 target_include_directories(${VP_MODEL_NAME_DEBUG} PRIVATE ${X})
@@ -389,9 +462,9 @@ function(vp_model)
             target_link_libraries(${VP_MODEL_NAME_DEBUG_M32} PRIVATE gvsoc_debug_m32)
             set_target_properties(${VP_MODEL_NAME_DEBUG_M32} PROPERTIES PREFIX "")
             target_compile_options(${VP_MODEL_NAME_DEBUG_M32} PRIVATE "-D__GVSOC__")
-            target_compile_options(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -m32 -D__M32_MODE__=1)
+            target_compile_options(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -m32 -D__M32_MODE__=1 -UNDEBUG)
             target_link_options(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -m32)
-            target_compile_definitions(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1)
+            target_compile_definitions(${VP_MODEL_NAME_DEBUG_M32} PRIVATE -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
             target_include_directories(${VP_MODEL_NAME_DEBUG_M32} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
             foreach(X IN LISTS GVSOC_MODULES)
                 target_include_directories(${VP_MODEL_NAME_DEBUG_M32} PRIVATE ${X})

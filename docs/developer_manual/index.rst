@@ -22,6 +22,7 @@ It aims to help users:
    models.rst
    tutorials.rst
    components/index.rst
+   targets/index.rst
 
 
 

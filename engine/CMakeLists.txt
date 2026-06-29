@@ -85,6 +85,55 @@ if(${BUILD_OPTIMIZED})
     endif()
 endif()
 
+# ==============
+# Asserts launcher
+# ==============
+# Same as the optimized variant (fully optimized, no trace/profile/memcheck
+# overhead) but with assertions active: NDEBUG is undefined so libc assert()
+# is kept, and VP_ASSERT_ACTIVE enables the gv_assert() macro.
+
+if(${BUILD_ASSERT})
+    add_library(gvsoc_asserts SHARED ${GVSOC_ENGINE_CXX_SRCS} ${GVSOC_ENGINE_C_SRCS})
+    target_compile_options(gvsoc_asserts PRIVATE -fno-stack-protector -UNDEBUG)
+    target_compile_definitions(gvsoc_asserts PRIVATE -DVP_ASSERT_ACTIVE=1)
+    target_include_directories(gvsoc_asserts PUBLIC ${GVSOC_ENGINE_INC_DIRS})
+    target_link_libraries(gvsoc_asserts PUBLIC z pthread ${CMAKE_DL_LIBS})
+    set_target_properties(gvsoc_asserts PROPERTIES OUTPUT_NAME "pulpvp-asserts")
+    install(TARGETS gvsoc_asserts
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+        INCLUDES DESTINATION include
+        )
+
+    add_executable(gvsoc_launcher_asserts "src/main.cpp")
+    target_compile_options(gvsoc_launcher_asserts PRIVATE -UNDEBUG)
+    target_compile_definitions(gvsoc_launcher_asserts PRIVATE -DVP_ASSERT_ACTIVE=1)
+    target_link_libraries(gvsoc_launcher_asserts PRIVATE gvsoc_asserts z pthread ${CMAKE_DL_LIBS})
+    install(TARGETS gvsoc_launcher_asserts
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+        INCLUDES DESTINATION include
+        )
+
+    # SystemC-linked variant, selected by gvrun for SystemC targets.
+    if(DEFINED ENV{SYSTEMC_HOME})
+        add_executable(gvsoc_launcher_asserts_sc "src/main.cpp" "src/systemc_driver.cpp")
+        target_compile_options(gvsoc_launcher_asserts_sc PRIVATE -DVP_USE_SYSTEMC=1 -UNDEBUG)
+        target_compile_definitions(gvsoc_launcher_asserts_sc PRIVATE -DVP_ASSERT_ACTIVE=1)
+        target_include_directories(gvsoc_launcher_asserts_sc PRIVATE $ENV{SYSTEMC_HOME}/include)
+        target_link_directories(gvsoc_launcher_asserts_sc PRIVATE $ENV{SYSTEMC_HOME}/lib64/)
+        target_link_libraries(gvsoc_launcher_asserts_sc PRIVATE systemc gvsoc_asserts z pthread ${CMAKE_DL_LIBS})
+        install(TARGETS gvsoc_launcher_asserts_sc
+            LIBRARY DESTINATION lib
+            ARCHIVE DESTINATION lib
+            RUNTIME DESTINATION bin
+            INCLUDES DESTINATION include
+            )
+    endif()
+endif()
+
 if(${BUILD_OPTIMIZED_M32})
     add_library(gvsoc_m32 SHARED ${GVSOC_ENGINE_CXX_SRCS} ${GVSOC_ENGINE_C_SRCS})
     target_include_directories(gvsoc_m32 PUBLIC ${GVSOC_ENGINE_INC_DIRS})
@@ -117,7 +166,8 @@ if(${BUILD_PROFILE})
         )
 
     # TODO VP_TRACE_ACTIVE should be removed as soon as traces have been switch to events
-    target_compile_definitions(gvsoc_profile PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1)
+    target_compile_definitions(gvsoc_profile PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+    target_compile_options(gvsoc_profile PRIVATE -UNDEBUG)
 
     add_executable(gvsoc_launcher_profile "src/main.cpp")
     target_link_libraries(gvsoc_launcher_profile PRIVATE gvsoc_profile z pthread ${CMAKE_DL_LIBS})
@@ -128,12 +178,13 @@ if(${BUILD_PROFILE})
         INCLUDES DESTINATION include
         )
     # TODO VP_TRACE_ACTIVE should be removed as soon as traces have been switch to events
-    target_compile_definitions(gvsoc_launcher_profile PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1)
+    target_compile_definitions(gvsoc_launcher_profile PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+    target_compile_options(gvsoc_launcher_profile PRIVATE -UNDEBUG)
 
     # SystemC-linked variant, selected by gvrun for SystemC targets.
     if(DEFINED ENV{SYSTEMC_HOME})
         add_executable(gvsoc_launcher_profile_sc "src/main.cpp" "src/systemc_driver.cpp")
-        target_compile_options(gvsoc_launcher_profile_sc PRIVATE -DVP_USE_SYSTEMC=1)
+        target_compile_options(gvsoc_launcher_profile_sc PRIVATE -DVP_USE_SYSTEMC=1 -UNDEBUG)
         target_include_directories(gvsoc_launcher_profile_sc PRIVATE $ENV{SYSTEMC_HOME}/include)
         target_link_directories(gvsoc_launcher_profile_sc PRIVATE $ENV{SYSTEMC_HOME}/lib64/)
         target_link_libraries(gvsoc_launcher_profile_sc PRIVATE systemc gvsoc_profile z pthread ${CMAKE_DL_LIBS})
@@ -144,7 +195,7 @@ if(${BUILD_PROFILE})
             INCLUDES DESTINATION include
             )
         # TODO VP_TRACE_ACTIVE should be removed as soon as traces have been switch to events
-        target_compile_definitions(gvsoc_launcher_profile_sc PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1)
+        target_compile_definitions(gvsoc_launcher_profile_sc PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
     endif()
 endif()
 
@@ -163,7 +214,8 @@ if(${BUILD_DEBUG})
         RUNTIME DESTINATION bin
         INCLUDES DESTINATION include
         )
-    target_compile_definitions(gvsoc_debug PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1)
+    target_compile_definitions(gvsoc_debug PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+    target_compile_options(gvsoc_debug PRIVATE -UNDEBUG)
 
     add_executable(gvsoc_launcher_debug "src/main.cpp")
     target_link_libraries(gvsoc_launcher_debug PRIVATE gvsoc_debug z pthread ${CMAKE_DL_LIBS})
@@ -173,12 +225,13 @@ if(${BUILD_DEBUG})
         RUNTIME DESTINATION bin
         INCLUDES DESTINATION include
         )
-    target_compile_definitions(gvsoc_launcher_debug PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1)
+    target_compile_definitions(gvsoc_launcher_debug PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+    target_compile_options(gvsoc_launcher_debug PRIVATE -UNDEBUG)
 
     # SystemC-linked variant, selected by gvrun for SystemC targets.
     if(DEFINED ENV{SYSTEMC_HOME})
         add_executable(gvsoc_launcher_debug_sc "src/main.cpp" "src/systemc_driver.cpp")
-        target_compile_options(gvsoc_launcher_debug_sc PRIVATE -DVP_USE_SYSTEMC=1)
+        target_compile_options(gvsoc_launcher_debug_sc PRIVATE -DVP_USE_SYSTEMC=1 -UNDEBUG)
         target_include_directories(gvsoc_launcher_debug_sc PRIVATE $ENV{SYSTEMC_HOME}/include)
         target_link_directories(gvsoc_launcher_debug_sc PRIVATE $ENV{SYSTEMC_HOME}/lib64/)
         target_link_libraries(gvsoc_launcher_debug_sc PRIVATE systemc gvsoc_debug z pthread ${CMAKE_DL_LIBS})
@@ -188,7 +241,7 @@ if(${BUILD_DEBUG})
             RUNTIME DESTINATION bin
             INCLUDES DESTINATION include
             )
-        target_compile_definitions(gvsoc_launcher_debug_sc PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1)
+        target_compile_definitions(gvsoc_launcher_debug_sc PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
     endif()
 endif()
 
@@ -202,7 +255,7 @@ if(${BUILD_DEBUG_M32})
         ARCHIVE DESTINATION lib
         INCLUDES DESTINATION include
         )
-    target_compile_definitions(gvsoc_debug_m32 PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1)
-    target_compile_options(gvsoc_debug_m32 PRIVATE -m32 -D__M32_MODE__)
+    target_compile_definitions(gvsoc_debug_m32 PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+    target_compile_options(gvsoc_debug_m32 PRIVATE -m32 -D__M32_MODE__ -UNDEBUG)
     target_link_options(gvsoc_debug_m32 PRIVATE "-m32")
 endif()

@@ -103,6 +103,38 @@ void gv::Controller::syscall_stop_handle()
             client->user->handle_syscall_stop();
         }
     }
+
+    // Proxy clients are not Gvsoc_users: pause the engine (the last-added client is the proxy's
+    // gating one) and push the stop to them over the wire.
+    if (this->proxy && !this->clients.empty())
+    {
+        this->stop(this->clients.back());
+        this->proxy->notify_syscall_stop();
+    }
+}
+
+void gv::Controller::declare_binary(const std::string &path)
+{
+    // Accumulate the binary (de-duplicated). On a genuinely new one, tell connected proxy clients
+    // the set changed so they re-query get_binaries(); a client connecting later picks it up from
+    // that query instead. No-op beyond accumulation when no proxy is enabled.
+    for (auto &known: this->declared_binaries)
+    {
+        if (known == path)
+        {
+            return;
+        }
+    }
+    this->declared_binaries.push_back(path);
+    if (this->proxy)
+    {
+        this->proxy->notify_binaries_changed();
+    }
+}
+
+std::vector<std::string> gv::Controller::get_binaries()
+{
+    return this->declared_binaries;
 }
 
 void gv::Controller::init(gv::GvsocConf *conf)
@@ -137,11 +169,22 @@ void gv::Controller::init(gv::GvsocConf *conf)
             this->systemc_enabled = gv_config->get_child_bool("systemc");
 
             this->proxy = NULL;
-            if (gv_config->get_child_bool("proxy/enabled"))
+            // The proxy is enabled either through the platform config ("proxy/enabled") or
+            // programmatically through GvsocConf (an in-process host, e.g. the GUI). Each session
+            // owns a control client that gates the engine against the always-on host (the GUI's
+            // database client driving the engine through the gvsoc API, or the standalone main.cpp
+            // client).
+            bool conf_proxy = this->conf && this->conf->proxy_enabled;
+            if (gv_config->get_child_bool("proxy/enabled") || conf_proxy)
             {
-                int in_port = gv_config->get_child_int("proxy/port");
+                // A programmatic in-process host (e.g. the GUI, via GvsocConf) always wants an
+                // ephemeral port and no startup wait (the console is an optional panel opened on
+                // demand). A config-enabled (standalone) proxy waits for a connection and takes its
+                // listening port from the config.
+                int in_port = conf_proxy ? 0 : gv_config->get_child_int("proxy/port");
+                this->proxy_wait = !conf_proxy;
                 int out_port;
-                this->proxy = new GvProxy(this->handler->get_time_engine(), instance);
+                this->proxy = new GvProxy(this->handler->get_time_engine(), instance, -1, -1);
 
                 if (this->proxy->open(in_port, &out_port))
                 {
@@ -205,8 +248,9 @@ void gv::Controller::start(ControllerClient *client)
     this->instance->reset_all(false);
 
     // Now that all initialization are done, wait for at least one proxy connection before
-    // running.
-    if (this->proxy)
+    // running. Skipped for an in-process host (proxy_wait false), where the console is an optional
+    // panel opened on demand and must not block engine startup.
+    if (this->proxy && this->proxy_wait)
     {
         this->proxy->wait_connected();
     }
@@ -226,6 +270,13 @@ void gv::Controller::start(ControllerClient *client)
 
 void gv::Controller::close(ControllerClient *client)
 {
+    // Tear down the proxy first so no session thread is left blocked reading its socket: such a
+    // thread holds a stdio FILE lock that would deadlock the stdio cleanup run at process exit.
+    if (this->proxy)
+    {
+        this->proxy->stop();
+    }
+
     ((vp::Top *)this->handler)->get_trace_engine()->flush();
 
     this->instance->stop_all();
@@ -246,13 +297,12 @@ void gv::Controller::close(ControllerClient *client)
 
 void gv::Controller::restart(ControllerClient *client)
 {
-    // Restart is not supported when the engine is driven by an external SystemC kernel
-    // since SystemC time cannot be rewound in-process, nor when the proxy is enabled
-    // since it keeps references to the system being destroyed.
-    if (this->systemc_enabled || this->proxy)
+    // Restart is not supported when the engine is driven by an external SystemC kernel since
+    // SystemC time cannot be rewound in-process. The proxy is supported: it only keeps a pointer
+    // to the system (repointed below) and its sessions re-fetch the engine each command.
+    if (this->systemc_enabled)
     {
-        fprintf(stderr, "Ignoring restart request, it is not supported %s\n",
-            this->systemc_enabled ? "on SystemC platforms" : "when the proxy is enabled");
+        fprintf(stderr, "Ignoring restart request, it is not supported on SystemC platforms\n");
         return;
     }
 
@@ -291,11 +341,28 @@ void gv::Controller::restart(ControllerClient *client)
     this->retval = -1;
     this->clients_want_run_prev = false;
 
+    // A restarted system is paused at time 0: drop every client's run request so nothing resumes on
+    // its own. The always-on host re-runs explicitly after restart (the GUI calls run() again); a
+    // proxy session (e.g. the console) stays parked until it issues run. Without this, a client that
+    // was running before the restart would keep the engine advancing immediately after rebuild.
+    this->run_count = 0;
+    for (ControllerClient *current: this->clients)
+    {
+        current->running = false;
+    }
+
     // Rebuild, mirroring init(), open() and start(). The engine and sigint threads are
     // not recreated, they stay around and dereference the new handler once resumed.
     this->handler = new vp::Top(this->config_path, this->is_async, this);
     this->instance = this->handler->top_instance;
     this->instance->set_launcher(this);
+
+    // The proxy holds a pointer to the system being destroyed; repoint it at the rebuilt one so
+    // proxy sessions (e.g. the GUI console) keep working across the restart.
+    if (this->proxy)
+    {
+        this->proxy->top = this->instance;
+    }
 
     this->step_block = new vp::Block(NULL, "stepper", this->handler->get_time_engine(),
         this->handler->get_trace_engine(), this->handler->get_power_engine());
@@ -415,6 +482,12 @@ void gv::Controller::sim_finished(int status)
             client->sim_finished(status);
         }
 
+        // Proxy clients (e.g. gvconsole) are not Gvsoc_users; push the exit to them over the wire.
+        if (this->proxy)
+        {
+            this->proxy->send_quit(status);
+        }
+
         pthread_cond_broadcast(&this->cond);
     }
 }
@@ -475,6 +548,11 @@ int64_t gv::Controller::stop(ControllerClient *client)
 {
     this->client_stop(client);
 
+    // If this client had a cycle-step outstanding, interrupt it so its front-end unblocks instead
+    // of staying stuck until the (now never-reached) target cycle. This method runs with the engine
+    // locked/halted, so canceling the pending clock event here is safe.
+    this->abort_step_cycles(client, "simulation stopped");
+
     // Since this method must be called with the engine locked, we are sure it is already stopped
     // thus we can safely return the current time as the time where it was stopped.
     return this->handler->get_time_engine()->get_time();
@@ -490,6 +568,106 @@ void gv::Controller::step_async(int64_t duration, ControllerClient *client, bool
     this->step_until_async(this->handler->get_time_engine()->get_time() + duration, client, wait, request);
 }
 
+void gv::Controller::step_cycles_async(int clock_id, int64_t count, ControllerClient *client,
+    bool wait, void *request)
+{
+    vp::ClockEngine *clock = this->handler->get_time_engine()->get_clock_engines()[clock_id];
+
+    // Carry the controller/client/request/clock into the C-style clock callback. Freed in the
+    // handler. The backing event is filled in just below.
+    StepCyclesReq *req = new StepCyclesReq{ this, client, request, clock, nullptr };
+
+    // Enqueue a delayed clock event at current_cycle + count in the domain itself. Its handler
+    // pauses the engine on a clean cycle boundary (end of the timestamp) and invokes our callback.
+    // The clock engine allocates one event per step, so several clients can have a cycle-step
+    // outstanding on the same domain at once.
+    req->event = clock->step_cycles(count, &Controller::step_cycles_async_handler, (void *)req);
+
+    // Remember the outstanding step on the client so it can be interrupted if the client is stopped
+    // before the target cycle is reached (see abort_step_cycles).
+    client->step_cycles_pending = req;
+
+    this->client_run(client);
+
+    if (wait)
+    {
+        // Block until the handler stops the client (step reached) or the sim ended.
+        while (client->running && !this->is_sim_finished)
+        {
+            pthread_cond_wait(&this->cond, &this->mutex);
+        }
+    }
+}
+
+void gv::Controller::step_cycles_async_handler(void *arg)
+{
+    StepCyclesReq *req = (StepCyclesReq *)arg;
+    Controller *_this = req->controller;
+    ControllerClient *client = req->client;
+    void *request = req->request;
+    _this->logger.info("Step cycles handler\n");
+
+    // The step reached its target: it is no longer outstanding, so a concurrent stop must not also
+    // try to abort it.
+    client->step_cycles_pending = nullptr;
+
+    _this->client_stop(client);
+
+    for (gv::ControllerClient *c: _this->clients)
+    {
+        if (c->user)
+        {
+            c->user->handle_step_end(request);
+        }
+    }
+
+    // Route the step-end reply to the proxy session that issued the step (same mechanism as the
+    // time-based step). No-op unless the proxy shares the host client.
+    if (_this->proxy)
+    {
+        _this->proxy->step_end(request);
+    }
+
+    delete req;
+}
+
+void gv::Controller::abort_step_cycles(ControllerClient *client, const std::string &reason)
+{
+    StepCyclesReq *req = client->step_cycles_pending;
+    if (req == nullptr)
+    {
+        return;
+    }
+    client->step_cycles_pending = nullptr;
+
+    this->logger.info("Aborting step cycles (client: %s, reason: %s)\n", client->name.c_str(),
+        reason.c_str());
+
+    // Cancel this step's own event so it does not fire (and send a second, spurious reply) when the
+    // engine is later resumed. Other clients' steps on the same domain have their own events and are
+    // left untouched.
+    req->clock->cancel_step_cycles(req->event);
+
+    void *request = req->request;
+
+    for (gv::ControllerClient *c: this->clients)
+    {
+        if (c->user)
+        {
+            c->user->handle_step_end(request);
+        }
+    }
+
+    // Route the interrupted step-end reply to the issuing proxy session, carrying the reason so the
+    // front-end can explain why the step did not complete. Same routing as the normal step-end.
+    if (this->proxy)
+    {
+        this->proxy->step_end(request, reason);
+    }
+
+    delete req;
+}
+
 void gv::Controller::step_async_handler(vp::Block *__this, vp::TimeEvent *event)
 {
     Controller *_this = (Controller *)event->get_args()[0];
@@ -503,6 +681,13 @@ void gv::Controller::step_async_handler(vp::Block *__this, vp::TimeEvent *event)
         {
             client->user->handle_step_end(event->get_args()[2]);
         }
+    }
+
+    // For a shared proxy session (no client user of its own), the step data is the session; route
+    // the step-end reply to it. No-op unless the proxy shares the host client.
+    if (_this->proxy)
+    {
+        _this->proxy->step_end(event->get_args()[2]);
     }
 
     delete event;
@@ -576,10 +761,8 @@ bool gv::Controller::is_runnable()
 void gv::Controller::check_run()
 {
     pthread_mutex_lock(&this->lock_mutex);
-    // Simulation can run if all clients are runnable and no one locked the engine, except once
-    // the simulation is finished, anyone can run it.
-    bool should_run = (this->run_count == this->clients.size() && this->lock_count == 0) ||
-        (this->is_sim_finished && this->run_count > 0);
+    // Simulation can run if all clients are runnable and no one locked the engine.
+    bool should_run = this->run_count == this->clients.size() && this->lock_count == 0;
 
     // Detect the genuine "all clients want to run" -> "paused" transition so we can notify
     // clients with has_stopped(). We key on run_count (the persistent run/stop state) rather
@@ -591,6 +774,8 @@ void gv::Controller::check_run()
     bool clients_want_run = this->clients.size() > 0 &&
         this->run_count == this->clients.size();
     bool notify_stopped = this->clients_want_run_prev && !clients_want_run;
+    // Symmetric paused->running edge, used to push a run notification over the proxy.
+    bool notify_running = !this->clients_want_run_prev && clients_want_run;
     this->clients_want_run_prev = clients_want_run;
 
     this->logger.info("Checking engine (should_run: %d, running: %d, run_count: %d, nb_clients: %d,"
@@ -622,6 +807,15 @@ void gv::Controller::check_run()
     if (notify_stopped)
     {
         this->sim_stopped();
+    }
+
+    // Push run-state changes over the proxy so connected front-ends (GUI button, console prompt)
+    // stay in sync regardless of which one drove the engine. No-op unless the proxy shares the
+    // host client (see GvProxy::notify_*).
+    if (this->proxy)
+    {
+        if (notify_running) this->proxy->notify_running();
+        if (notify_stopped) this->proxy->notify_stopped();
     }
 }
 

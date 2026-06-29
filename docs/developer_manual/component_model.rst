@@ -473,7 +473,7 @@ is appended to ``GVSOC_MODULES`` at configure time:
 Multiple roots are separated by ``;``. Paths should be absolute so that the
 build is reproducible regardless of the current working directory.
 
-Each root listed in ``GVSOC_MODULES`` is used for three things:
+Each root listed in ``GVSOC_MODULES`` is used for four things:
 
 - **CMake integration.** If the root contains a top-level ``CMakeLists.txt``,
   it is pulled in via ``add_subdirectory()``. Any ``vp_model(...)``,
@@ -486,6 +486,39 @@ Each root listed in ``GVSOC_MODULES`` is used for three things:
 - **Generator discovery.** Each root is passed to ``gvrun`` / ``gapy`` as a
   ``--target-dir`` option, so Python generator modules below it become
   importable when building or instantiating targets.
+- **Documentation embedding.** If the root ships a ``docs/`` tree, it is
+  pulled into the GVSoC manuals at doc build time — the documentation
+  counterpart of the ``CMakeLists.txt`` pickup. See `Embedding module
+  documentation`_ below.
+
+Embedding module documentation
+##############################
+
+In addition to models and generators, a module root can contribute its own
+user and developer documentation, which is woven into the *Targets* section
+of the corresponding GVSoC manual.
+
+To have a module's documentation appear there, ship a ``docs/`` directory
+with one or both of:
+
+- ``docs/user_manual/index.rst`` — embedded into the **user manual**;
+- ``docs/developer_manual/index.rst`` — embedded into the **developer
+  manual**.
+
+A bare ``docs/index.rst`` (the older single-tree layout) is still accepted
+and treated as user-manual content. The ``docs/`` directory is looked up both
+directly under the module root and one level above it (so a module whose
+roots are e.g. ``mymod/targets`` and ``mymod/models`` can keep its docs in
+the sibling ``mymod/docs``).
+
+At doc build time, ``make doc`` exports ``GVSOC_MODULES`` and the manuals walk
+it: each discovered ``docs/<manual>`` tree is copied under the manual's
+``targets/_generated/`` directory and added to its *Targets* toctree. The
+module's standalone ``conf.py`` is not used as-is, but any Sphinx
+``extensions`` it declares (e.g. ``sphinx.ext.graphviz``) are merged into the
+host manual so its directives keep working. A module that merely re-ships a
+copy of the engine's own manual (same top-level reference label) is skipped to
+avoid duplicate-label clashes.
 
 A minimum external directory therefore looks like this:
 

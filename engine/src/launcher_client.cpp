@@ -203,6 +203,18 @@ void gv::ControllerClient::step(int64_t duration, bool wait, void *data)
     }
 }
 
+void gv::ControllerClient::step_cycles(int clock_id, int64_t count, bool wait, void *data)
+{
+    this->logger.info("Step cycles (clock_id: %d, count: %lld)\n", clock_id, count);
+    // Only the async path is wired: the proxy always issues step_cycles asynchronously.
+    if (this->async)
+    {
+        gv::Controller::get().lock();
+        gv::Controller::get().step_cycles_async(clock_id, count, this, wait, data);
+        gv::Controller::get().unlock();
+    }
+}
+
 
 void gv::ControllerClient::step_until(int64_t timestamp, bool wait, void *data)
 {

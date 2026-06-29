@@ -80,6 +80,11 @@ namespace vp {
         // enable_set); on enable it allocates and returns the streaming handle (trace->user_trace).
         // No-op when not streaming to a Vcd_user.
         void *event_enable_now(vp::Trace *trace, bool enabled);
+        // Serialize a register trace's bit-field layout as a JSON description
+        // ({"fields":[{"n":"NAME","b":bit,"w":width},...]}) for the GUI, or ""
+        // when the trace carries no fields. Read lazily, after the generated
+        // register ctor has populated trace->regfields.
+        static std::string regfields_to_json(vp::Trace *trace);
 
         static uint8_t *parse_event(uint8_t *buffer, bool &unlock);
         static uint8_t *parse_event_1(uint8_t *buffer, bool &unlock);

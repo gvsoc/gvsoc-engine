@@ -33,6 +33,7 @@ namespace vp {
 	class TraceEngine;
 	class Trace;
 	class Event;
+	class regfield;
 
 	using TraceParseCallback = uint8_t *(*)(uint8_t *buffer, bool &unlock);
     using TraceDumpCallback = void (*)(vp::TraceEngine*, vp::Trace*, int64_t, int64_t, uint8_t*, uint8_t*);
@@ -96,7 +97,29 @@ public:
     // transition triggers enable_set(false). Default 0 means events are
     // suppressed (dump_callback stays NULL) and produce no DB / file output.
     int subscriber_count = 0;
+
+    // --- register support (used by vp::Register::reg_event) ---
+    // Borrowed pointers to the owning register's bit-field layout and offset.
+    // Read lazily when the description is built, because the generated register
+    // ctor fills them after this Event is constructed. nullptr for a
+    // non-register event.
+    std::vector<vp::regfield *> *regfields = nullptr;
+    uint64_t *reg_offset = nullptr;
+
+    // Event API used by vp::Register (mirrors the legacy vp::Trace event calls
+    // so the register models stay unchanged across the Trace->Event switch).
+    inline bool get_event_active() { return this->active_get(); }
+    inline void event(uint8_t *value, int64_t cycle_delay=0, int64_t time_delay=0) { this->dump_value(value, time_delay); }
+    inline void event_highz(int64_t cycle_delay=0, int64_t time_delay=0) { this->dump_highz(time_delay); }
+
 private:
+    // Description sent to the Vcd_user. For a register event this is the
+    // {"offset":N,"fields":[...]} JSON (so the GUI orders registers by address
+    // and shows their bit-fields); otherwise the plain description string.
+    // Built lazily (after the register ctor filled regfields/reg_offset).
+    const char *get_description();
+    std::string built_description;
+
     static void dump_string(vp::Event *event, uint8_t *value, int64_t time_delay, uint8_t *flags);
     static void dump_1(vp::Event *event, uint8_t *value, int64_t time_delay, uint8_t *flags);
     static void dump_8(vp::Event *event, uint8_t *value, int64_t time_delay, uint8_t *flags);
@@ -165,9 +188,16 @@ public:
     void declare_to(gv::Vcd_user *user) {}
     inline bool active_get() { return false; }
 
+    // Register-facing API (see the active variant). No-ops when events are off.
+    inline bool get_event_active() { return false; }
+    inline void event(uint8_t *value, int64_t cycle_delay=0, int64_t time_delay=0) {}
+    inline void event_highz(int64_t cycle_delay=0, int64_t time_delay=0) {}
+
     gv::Vcd_event_type type=gv::Vcd_event_type_logical;
     int width=0;
     int subscriber_count = 0;
+    std::vector<vp::regfield *> *regfields = nullptr;
+    uint64_t *reg_offset = nullptr;
 };
 #endif
 
@@ -198,6 +228,7 @@ class Trace {
     void force_warning_no_error(const char *fmt, ...);
     void force_warning_no_error(warning_type_e type, const char *fmt, ...);
     inline void fatal(const char *fmt, ...);
+    void assert_fail(const char *fmt, va_list ap);
 
     inline void event_highz(int64_t cycle_delay = 0, int64_t time_delay = 0);
     inline void event(uint8_t *value, int64_t cycle_delay = 0, int64_t time_delay = 0);
@@ -239,6 +270,13 @@ class Trace {
     // Same role as vp::Event::subscriber_count — refcount of live
     // gv::Vcd::event_subscribe() callers matching this legacy trace's path.
     int subscriber_count = 0;
+    // Borrowed pointer to the owning register's bit-field layout
+    // (name/bit/width), or nullptr for a non-register trace. Set when the
+    // register is constructed; the vector itself is filled later by the
+    // generated register ctor, so it must only be read lazily (at enable /
+    // declare time), never at trace-creation time. Serialized to the GUI as
+    // JSON in the trace description so the timeline can show field rows.
+    std::vector<vp::regfield *> *regfields = nullptr;
 
   protected:
     int level;

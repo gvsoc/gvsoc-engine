@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Generate SystemVerilog designs from IpBlock object"""
 
+from importlib.resources import as_file, files
 import logging as log
 import os
 from typing import Dict, Optional, Tuple
 
 from mako import exceptions  # type: ignore
 from mako.template import Template  # type: ignore
-from pkg_resources import resource_filename
 
 from .ip_block import IpBlock
 from .multi_register import MultiRegister
@@ -92,10 +92,12 @@ def get_reg_tx_type(block: IpBlock, reg: RegBase, hw2reg: bool) -> str:
 
 def gen_rtl(block: IpBlock, outdir: str) -> int:
     # Read Register templates
-    reg_top_tpl = Template(
-        filename=resource_filename('reggen', 'reg_top.sv.tpl'))
-    reg_pkg_tpl = Template(
-        filename=resource_filename('reggen', 'reg_pkg.sv.tpl'))
+    with as_file(files('reggen').joinpath('reg_top.sv.tpl')) as f:
+        reg_top_tpl = Template(
+            filename=str(f))
+    with as_file(files('reggen').joinpath('reg_pkg.sv.tpl')) as f:
+        reg_pkg_tpl = Template(
+            filename=str(f))
 
     # Generate <block>_reg_pkg.sv
     #

@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 
-import pkg_resources  # part of setuptools
+from importlib.metadata import version
 
 
 def show_and_exit(clitool, packages):
@@ -20,5 +20,5 @@ def show_and_exit(clitool, packages):
         ver = 'not found (not in Git repository?)'
     sys.stderr.write(clitool + " Git version " + ver + '\n')
     for p in packages:
-        sys.stderr.write(p + ' ' + pkg_resources.require(p)[0].version + '\n')
+        sys.stderr.write(p + ' ' + version(p) + '\n')
     exit(0)

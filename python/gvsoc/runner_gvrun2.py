@@ -112,8 +112,11 @@ def gen_config(args, config, cosim_mode):
         len(gvsoc_config.get('events/include_regex')) != 0 or \
         args.gui or args.power or args.stats
 
+    asserts_mode = args.asserts_mode or gvsoc_config.get_bool('asserts-mode')
+
     gvsoc_config.set("debug-mode", debug_mode)
     gvsoc_config.set("profile-mode", profile_mode)
+    gvsoc_config.set("asserts-mode", asserts_mode)
 
     gvsoc_config_path = 'gvsoc_config.json'
 
@@ -196,11 +199,13 @@ class Runner():
                     "verbose": True,
                     "debug-mode": False,
                     "profile-mode": False,
+                    "asserts-mode": False,
 
                     "launchers": {
                         "default": "gvsoc_launcher",
                         "profile": "gvsoc_launcher_profile",
-                        "debug": "gvsoc_launcher_debug"
+                        "debug": "gvsoc_launcher_debug",
+                        "asserts": "gvsoc_launcher_asserts"
                     },
 
                     "traces": {
@@ -610,6 +615,8 @@ class Runner():
                         launcher = gvsoc_config.get_str('launchers/debug')
                     elif gvsoc_config.get_bool("profile-mode"):
                         launcher = gvsoc_config.get_str('launchers/profile')
+                    elif gvsoc_config.get_bool("asserts-mode"):
+                        launcher = gvsoc_config.get_str('launchers/asserts')
                     else:
                         launcher = gvsoc_config.get_str('launchers/default')
 
@@ -882,6 +889,9 @@ class Target(gvrun.target.Target):
 
             parser.add_argument("--profile-mode", dest="profile_mode", action="store_true",
                     help="Launch in profile-mode (for events)")
+
+            parser.add_argument("--asserts-mode", dest="asserts_mode", action="store_true",
+                    help="Launch in asserts-mode (optimized build with assertions enabled)")
 
             parser.add_argument("--gtkw", dest="gtkw", action="store_true",
                                 help="Generate GTKwave script")

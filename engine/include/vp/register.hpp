@@ -79,7 +79,7 @@ namespace vp
         int nb_bytes;
         std::string name = "";
         vp::Trace trace;
-        vp::Trace reg_event;
+        vp::Event reg_event;
         std::vector<regfield *> regfields;
         bool do_reset;
         uint64_t offset;

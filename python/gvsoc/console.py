@@ -101,6 +101,32 @@ class GvsocConsole(cmd.Cmd):
 
     intro = "GVSoC Interactive Console. Type 'help' for available commands.\n"
 
+    # Ordered command categories, mirroring the section dividers below. Each
+    # entry is (key, title, description, [command names]). The key is used by
+    # `help <category>` and is chosen to not collide with any command name.
+    HELP_CATEGORIES = [
+        ("control",   "Simulation control", "Run, step, stop and query the simulation",
+            ["run", "step", "stepc", "stop", "status", "quit", "terminate", "exit"]),
+        ("clock",     "Clock domains",      "List and select clock domains",
+            ["clock"]),
+        ("trace",     "Traces & events",    "Enable/disable traces and VCD events",
+            ["trace", "event"]),
+        ("memory",    "Memory access",      "Read and write memory via a router",
+            ["mem"]),
+        ("component", "Components",         "Send commands to platform components",
+            ["component"]),
+        ("debug",     "Breakpoints",        "Breakpoints, watchpoints and info",
+            ["break", "watch", "rwatch", "delete", "info"]),
+        ("registers", "CPU registers",      "Read CPU registers",
+            ["reg"]),
+        ("symbols",   "Symbol table",       "Load and resolve ELF symbols",
+            ["symbol"]),
+        ("settings",  "Settings",           "Configure router/iss/tracefile",
+            ["set"]),
+        ("script",    "Scripting",          "Run commands from a file",
+            ["script"]),
+    ]
+
     def __init__(self, host='localhost', port=42951):
         super().__init__()
         self.host = host
@@ -119,8 +145,12 @@ class GvsocConsole(cmd.Cmd):
         self.iss_ptr = None  # cached ISS component pointer
         self.symbols = {}  # name -> addr
         self.sym_addrs = []  # sorted list of (addr, name) for reverse lookup
+        self._loaded_binaries = set()  # engine binaries already auto-loaded (see _sync_binaries)
+        self._applied_binaries_seq = 0  # last reader.binaries_changed_seq we reacted to
         self.trace_file = None  # path to trace output file
         self.trace_file_pos = 0  # current read position
+        self.gui_embedded = False  # True when launched behind the GUI relay (sync clock selection)
+        self._applied_clock_seq = 0  # reader sequence of the last GUI clock selection we applied
         self._update_prompt()
 
     def preloop(self):
@@ -141,6 +171,11 @@ class GvsocConsole(cmd.Cmd):
             print(f"Error: cannot connect to GVSoC proxy at {self.host}:{self.port} ({e})")
             sys.exit(1)
 
+        # Query the engine's registered binaries and load their symbols, so breakpoints by symbol
+        # name work out of the box without a manual `symbol load`. The query is a synchronous
+        # round-trip, so it is race-free even in script mode where the first command runs immediately.
+        self._sync_binaries()
+
         self._update_prompt()
 
     def postloop(self):
@@ -158,12 +193,43 @@ class GvsocConsole(cmd.Cmd):
     def precmd(self, line):
         """Drain notification queue and update prompt before each command."""
         self._drain_notifications()
+        self._sync_binaries_if_changed()
+        self._sync_clock_from_gui()
         self._update_prompt()
         return line
+
+    def _notify_clock_selection(self, path):
+        """Mirror a console-originated clock selection to the GUI timeline icon.
+
+        Only when embedded in the GUI: the relay intercepts this line and never forwards it to the
+        engine, so it is fire-and-forget (no reply to wait for). Selections coming FROM the GUI are
+        applied via _sync_clock_from_gui and never reach here, so there is no feedback loop.
+        """
+        if not self.gui_embedded or not path or self.proxy is None:
+            return
+        try:
+            self.proxy._send_cmd('clock_select %s' % path, wait_reply=False)
+        except Exception:
+            pass
+
+    def _sync_clock_from_gui(self):
+        """Adopt a clock-domain selection pushed from the GUI (icon / signal right-click).
+
+        The reader stamps each inbound notification with an incrementing sequence so a re-selection of
+        the same domain is still seen. Applied locally only (used by 'stepc'/'clock info'); not echoed.
+        """
+        reader = self.proxy.reader if self.proxy else None
+        if reader is None:
+            return
+        seq = getattr(reader, 'active_clock_seq', 0)
+        if seq != self._applied_clock_seq:
+            self._applied_clock_seq = seq
+            self.clock_domain = getattr(reader, 'active_clock', None)
 
     def postcmd(self, stop, line):
         """Update prompt after each command."""
         self._drain_notifications()
+        self._sync_binaries_if_changed()
         self._update_prompt()
         return stop
 
@@ -179,6 +245,78 @@ class GvsocConsole(cmd.Cmd):
     def do_exit(self, arg):
         """Exit the console."""
         return True
+
+    def _cmd_summary(self, name):
+        """Return the first non-blank line of a command's docstring."""
+        doc = getattr(self, 'do_' + name, None).__doc__ or ''
+        for line in doc.strip().splitlines():
+            line = line.strip()
+            if line:
+                return line
+        return ''
+
+    def _print_group(self, title, names, width):
+        """Print a category header followed by its commands and summaries.
+
+        `width` is the command-name column width, passed in so descriptions
+        align across every group, not just within one.
+        """
+        print(f"{title}:")
+        for name in names:
+            print(f"  {name.ljust(width)}  {self._cmd_summary(name)}")
+
+    def do_help(self, arg):
+        """Show grouped help, a single category, or one command's details.
+
+        Usage: help [command|category]
+          help            - list all commands grouped by category
+          help <category> - list the commands in one category
+          help <command>  - show full details for a command
+
+        Categories: control, clock, trace, memory, component, debug,
+                    registers, symbols, settings, script
+        """
+        arg = arg.strip()
+
+        # A specific command always wins over a category of the same spelling.
+        if arg and hasattr(self, 'do_' + arg):
+            return super().do_help(arg)
+
+        # Width of the command-name column, shared by every group so the
+        # description column lines up across the whole listing.
+        all_cmds = [n[3:] for n in dir(self)
+                    if n.startswith('do_') and n not in ('do_EOF', 'do_help')]
+        width = max((len(n) for n in all_cmds), default=0)
+
+        if arg:
+            for key, title, _desc, names in self.HELP_CATEGORIES:
+                if arg.lower() in (key, title.lower()):
+                    self._print_group(title, names, width)
+                    return
+            print(f"No help available for '{arg}'.")
+            return
+
+        # No argument: grouped overview of everything.
+        categorized = set()
+        for key, title, _desc, names in self.HELP_CATEGORIES:
+            self._print_group(title, names, width)
+            categorized.update(names)
+            print()
+
+        # Any command not listed in a category lands in "Other", so a newly
+        # added command is never silently hidden from help.
+        others = sorted(c for c in all_cmds if c not in categorized)
+        if others:
+            self._print_group("Other", others, width)
+            print()
+
+        print("type 'help <command>' for details, 'help <category>' for a group")
+
+    def complete_help(self, text, line, begidx, endidx):
+        """Complete command names and category keys after `help`."""
+        names = {n[3:] for n in dir(self) if n.startswith('do_') and n != 'do_EOF'}
+        names |= {key for key, _t, _d, _c in self.HELP_CATEGORIES}
+        return sorted(n for n in names if n.startswith(text))
 
     # ──────────────────────────────────────────────
     # Simulation Control
@@ -277,7 +415,10 @@ class GvsocConsole(cmd.Cmd):
             print(f"Error: clock domain '{self.clock_domain}' not found")
             return
 
-        # Use true cycle-based stepping
+        # Use true cycle-based stepping. Clear the interrupted-step reason first; the reader sets it
+        # only if the engine reports the step was stopped before completing (e.g. toolbar stop, or
+        # later a breakpoint).
+        self.proxy.reader.step_stop_reason = None
         reply = self.proxy.step_cycles(clock_idx, count)
         try:
             timestamp = int(reply.strip())
@@ -288,7 +429,12 @@ class GvsocConsole(cmd.Cmd):
         self._display_new_traces()
         self._update_prompt()
         time_str = format_time(timestamp) if timestamp is not None else "unknown"
-        print(f"Stepped {count} cycle(s). Time: {time_str}")
+        stop_reason = self.proxy.reader.step_stop_reason
+        if stop_reason:
+            print(f"Step interrupted ({stop_reason}) before completing {count} cycle(s). "
+                f"Time: {time_str}")
+        else:
+            print(f"Stepped {count} cycle(s). Time: {time_str}")
         self._check_breakpoint_hit()
 
     def do_stop(self, arg):
@@ -392,6 +538,7 @@ class GvsocConsole(cmd.Cmd):
                 print(f"Error: clock domain '{path}' not found. Use 'clock list' to see available domains.")
                 return
             self.clock_domain = found['path']
+            self._notify_clock_selection(self.clock_domain)
             print(f"Selected clock domain: {self.clock_domain}")
             print(f"  Frequency: {found.get('frequency', 0)} Hz")
             print(f"  Period:    {found.get('period', 0)} ps")
@@ -1029,11 +1176,79 @@ class GvsocConsole(cmd.Cmd):
     # Symbol Table
     # ──────────────────────────────────────────────
 
+    def _load_symbols(self, path):
+        """Load ELF symbols from `path` into the console symbol table.
+
+        Returns (count, error_message); error_message is None on success.
+        """
+        path = os.path.expanduser(path)
+        if not os.path.isfile(path):
+            return None, f"file not found: {path}"
+        try:
+            from elftools.elf.elffile import ELFFile
+            from elftools.elf.sections import SymbolTableSection
+        except ImportError:
+            return None, "pyelftools not installed (pip install pyelftools)"
+        try:
+            with open(path, 'rb') as f:
+                elf = ELFFile(f)
+                count = 0
+                for section in elf.iter_sections():
+                    if isinstance(section, SymbolTableSection):
+                        for sym in section.iter_symbols():
+                            if sym.name and sym.entry['st_value'] != 0 and \
+                               sym.entry['st_info']['type'] in ('STT_FUNC', 'STT_OBJECT', 'STT_NOTYPE'):
+                                self.symbols[sym.name] = sym.entry['st_value']
+                                count += 1
+            # Build sorted address list for reverse lookup
+            self.sym_addrs = sorted(
+                [(addr, name) for name, addr in self.symbols.items()],
+                key=lambda x: x[0]
+            )
+            return count, None
+        except Exception as e:
+            return None, f"error reading ELF: {e}"
+
+    def _sync_binaries(self):
+        """Query the engine's registered binaries and auto-load symbols for any new ones.
+
+        Lets `break <symbol>` work without a manual `symbol load`. Pull-based: the engine accumulates
+        binaries (declared by models at reset or dynamically) and we fetch the list here. Already
+        loaded ones are skipped, so this is safe to call repeatedly.
+        """
+        reader = self.proxy.reader if self.proxy else None
+        if reader is not None:
+            # Record the change-counter we are about to satisfy, so a notification that arrives before
+            # this query is not re-handled needlessly.
+            self._applied_binaries_seq = reader.binaries_changed_seq
+        try:
+            binaries = self.proxy.get_binaries()
+        except Exception:
+            return
+        for path in binaries:
+            if path in self._loaded_binaries:
+                continue
+            self._loaded_binaries.add(path)
+            if not path or not os.path.isfile(os.path.expanduser(path)):
+                continue
+            count, err = self._load_symbols(path)
+            if not err:
+                print(f"Auto-loaded {count} symbols from {path}")
+
+    def _sync_binaries_if_changed(self):
+        """Re-sync binaries only when the engine has signalled a change (binaries_changed)."""
+        reader = self.proxy.reader if self.proxy else None
+        if reader is not None and reader.binaries_changed_seq != self._applied_binaries_seq:
+            self._sync_binaries()
+
     def _addr_to_symbol(self, addr):
         """Resolve an address to the nearest symbol name + offset."""
         if not self.sym_addrs:
             return None
-        idx = bisect.bisect_right(self.sym_addrs, (addr, '')) - 1
+        # Use a sentinel above any real name so every symbol *at* `addr` is included: with a
+        # ('', addr) low key, an exact match like (addr, 'main') sorts after (addr, '') and would
+        # be skipped, mislabelling the address as the previous symbol + offset.
+        idx = bisect.bisect_right(self.sym_addrs, (addr, '\U0010FFFF')) - 1
         if idx < 0:
             return None
         sym_addr, sym_name = self.sym_addrs[idx]
@@ -1078,35 +1293,11 @@ class GvsocConsole(cmd.Cmd):
             if not subarg:
                 print("Usage: symbol load <elf_path>")
                 return
-            path = os.path.expanduser(subarg)
-            if not os.path.isfile(path):
-                print(f"Error: file not found: {path}")
-                return
-            try:
-                from elftools.elf.elffile import ELFFile
-                from elftools.elf.sections import SymbolTableSection
-            except ImportError:
-                print("Error: pyelftools not installed (pip install pyelftools)")
-                return
-            try:
-                with open(path, 'rb') as f:
-                    elf = ELFFile(f)
-                    count = 0
-                    for section in elf.iter_sections():
-                        if isinstance(section, SymbolTableSection):
-                            for sym in section.iter_symbols():
-                                if sym.name and sym.entry['st_value'] != 0 and \
-                                   sym.entry['st_info']['type'] in ('STT_FUNC', 'STT_OBJECT', 'STT_NOTYPE'):
-                                    self.symbols[sym.name] = sym.entry['st_value']
-                                    count += 1
-                # Build sorted address list for reverse lookup
-                self.sym_addrs = sorted(
-                    [(addr, name) for name, addr in self.symbols.items()],
-                    key=lambda x: x[0]
-                )
-                print(f"Loaded {count} symbols from {path}")
-            except Exception as e:
-                print(f"Error reading ELF: {e}")
+            count, err = self._load_symbols(subarg)
+            if err:
+                print(f"Error: {err}")
+            else:
+                print(f"Loaded {count} symbols from {os.path.expanduser(subarg)}")
 
         elif subcmd == 'lookup':
             if not subarg:
@@ -1346,9 +1537,13 @@ def main():
                         help="Execute commands from file then exit")
     parser.add_argument("--tracefile", default=None,
                         help="Trace output file to monitor for inline display")
+    parser.add_argument("--gui-embedded", dest="gui_embedded", action="store_true",
+                        help="Console runs behind the GUI proxy relay; relay clock-domain selections "
+                             "to the timeline icon")
     args = parser.parse_args()
 
     console = GvsocConsole(args.host, args.port)
+    console.gui_embedded = args.gui_embedded
     if args.tracefile:
         console.trace_file = os.path.expanduser(args.tracefile)
         console.trace_file_pos = os.path.getsize(console.trace_file) if os.path.exists(console.trace_file) else 0

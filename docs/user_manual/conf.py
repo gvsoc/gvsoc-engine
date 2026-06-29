@@ -12,6 +12,7 @@
 #
 import os
 import sys
+from pathlib import Path
 # sys.path.insert(0, os.path.abspath('.'))
 
 
@@ -24,6 +25,34 @@ author = 'Germain Haugou'
 # Add gvsoc_control python module
 sys.path.insert(0, os.path.abspath('../engine/python/'))
 
+# -- Target documentation embedding ------------------------------------------
+#
+# Walks GVSOC_MODULES and embeds the docs/ tree shipped by each module
+# under targets/_generated/ (gitignored) — the documentation counterpart
+# of CMake pulling in each module's CMakeLists.txt. If GVSOC_MODULES is not
+# set, a stub is written so the toctree in targets/index.rst still resolves.
+# The Makefile's `doc` target exports GVSOC_MODULES.
+
+_DOC_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(_DOC_ROOT.parent / '_ext'))
+import target_docs  # noqa: E402
+
+_embedded_extensions = []
+if os.environ.get('GVSOC_MODULES'):
+    _embedded_extensions = target_docs.generate(_DOC_ROOT, 'user_manual')
+else:
+    print('GVSOC_MODULES not set — skipping target documentation embedding.')
+    _stub_dir = _DOC_ROOT / 'targets' / '_generated'
+    _stub_dir.mkdir(parents=True, exist_ok=True)
+    (_stub_dir / 'index.rst').write_text(
+        'Target documentation\n'
+        '====================\n\n'
+        '``GVSOC_MODULES`` was not set when the docs were built, so no '
+        'target-specific documentation was embedded. Rebuild via '
+        '``make doc`` (which exports ``GVSOC_MODULES``) to populate this '
+        'section.\n'
+    )
+
 # -- General configuration ---------------------------------------------------
 
 # Add any Sphinx extension module names here, as strings. They can be
@@ -32,6 +61,12 @@ sys.path.insert(0, os.path.abspath('../engine/python/'))
 extensions = [
     'sphinx.ext.autodoc'
 ]
+
+# Extensions required by the embedded module docs (e.g. sphinx.ext.graphviz),
+# picked up from each module's standalone conf.py.
+for _ext in _embedded_extensions:
+    if _ext not in extensions:
+        extensions.append(_ext)
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']

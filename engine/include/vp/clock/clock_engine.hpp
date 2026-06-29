@@ -76,7 +76,29 @@ namespace vp
          * The callback is invoked when the cycles have elapsed.
          */
         typedef void (*step_cycles_callback_t)(void *arg);
-        void step_cycles(int64_t count, step_cycles_callback_t callback = nullptr, void *callback_arg = nullptr);
+
+        /**
+         * @brief Step by a number of cycles
+         *
+         * Enqueues a dedicated clock event that pauses the time engine after exactly `count` cycles
+         * and then invokes `callback(callback_arg)`. One event is allocated per call, so any number
+         * of cycle-steps (e.g. from independent clients) can be outstanding on this domain at once.
+         * The event is freed when it fires; cancel it before then with cancel_step_cycles().
+         *
+         * @return The event backing this step, for use with cancel_step_cycles().
+         */
+        vp::ClockEvent *step_cycles(int64_t count, step_cycles_callback_t callback = nullptr,
+            void *callback_arg = nullptr);
+
+        /**
+         * @brief Cancel a pending cycle-step
+         *
+         * Removes the step `event` (returned by step_cycles) from the clock queues if still pending
+         * and frees it, so a step interrupted before completion (e.g. the simulation was stopped)
+         * does not fire later when the engine is resumed. Must not be called once the event has
+         * already fired (it is freed then). Tolerates a null event.
+         */
+        void cancel_step_cycles(vp::ClockEvent *event);
 
         /**
          * @brief Get current cycles
@@ -240,10 +262,8 @@ namespace vp
         vp::ClockEvent apply_frequency_event;
         int64_t frequency_to_be_applied;
 
-        // Cycle-based stepping
-        vp::ClockEvent *step_cycles_event = nullptr;
-        step_cycles_callback_t step_cycles_callback = nullptr;
-        void *step_cycles_callback_arg = nullptr;
+        // Cycle-based stepping uses one dedicated event per outstanding step (see step_cycles), so
+        // there is no shared per-domain state here.
 
         // Statistics
         vp::StatScalar stat_start_cycle;

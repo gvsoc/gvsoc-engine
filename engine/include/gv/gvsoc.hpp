@@ -35,8 +35,9 @@ namespace gv {
      * v2 == ComponentTreeNode carries TreeMapping address maps (layout change).
      * v3 == Gvsoc::restart() added (a consumer calling it needs an engine providing it).
      * v4 == TreeBinding carries master/slave signature labels (layout change).
+     * v5 == GvsocConf gains proxy_enabled (layout change).
      */
-    #define GV_API_VERSION 4
+    #define GV_API_VERSION 5
 
     /**
      * Return the GV_API_VERSION the engine was built with.
@@ -948,6 +949,19 @@ namespace gv {
          * already running GVSOC instance.
          */
         int proxy_socket = -1;
+
+        /**
+         * Open an in-process proxy for an in-process host (e.g. the GUI).
+         *
+         * When set, the engine opens a proxy endpoint so external clients (e.g. gvconsole, or the
+         * GUI's command console) can drive the simulation. The host (this in-process embedder)
+         * keeps running the engine continuously through the gvsoc API; each proxy session owns a
+         * control client that AND-gates the engine against the host, so a session run/stop starts
+         * and parks it. An ephemeral port and no startup wait are implied for an in-process host.
+         * The opened port is returned in proxy_socket. This is an alternative to enabling the proxy
+         * through the platform configuration ("proxy/enabled").
+         */
+        bool proxy_enabled = false;
 
         /**
          * API mode.

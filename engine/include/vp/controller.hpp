@@ -35,6 +35,20 @@ namespace gv {
 
     extern gv::Controller controller;
 
+    // Context carried into ClockEngine::step_cycles' C-style callback (void(*)(void*)), which cannot
+    // use TimeEvent::get_args() like the time-step path. Heap-allocated by step_cycles_async and
+    // freed by step_cycles_async_handler.
+    struct StepCyclesReq
+    {
+        Controller *controller;
+        ControllerClient *client;
+        void *request;
+        // Clock domain the step event is enqueued in, and the event itself, so the step can be
+        // canceled on abort. `event` is owned by the clock engine and freed when it fires.
+        vp::ClockEngine *clock;
+        vp::ClockEvent *event;
+    };
+
     class Logger
     {
     public:
@@ -100,6 +114,10 @@ namespace gv {
         void step_sync(int64_t duration, ControllerClient *client);
         // Run simulation for specified duration in asynchronous mode
         void step_async(int64_t duration, ControllerClient *client, bool wait, void *request);
+        // Step a clock domain by exactly count cycles in asynchronous mode, using a clock event
+        // enqueued in the domain itself (cycle-accurate, immune to frequency changes).
+        void step_cycles_async(int clock_id, int64_t count, ControllerClient *client, bool wait,
+            void *request);
         // Run simulation until specified timestamp is reached, in synchronous mode
         void step_until_sync(int64_t timestamp, ControllerClient *client);
         // Run simulation until specified timestamp is reached, in asynchronous mode
@@ -116,6 +134,17 @@ namespace gv {
         void unregister_client(ControllerClient *client);
         // Can be called to handle a semi-hosting stop
         void syscall_stop_handle();
+
+        // Register an ELF binary a model has gained access to (statically at reset, or dynamically at
+        // run time e.g. via semi-hosting). The path is accumulated in the engine and connected proxy
+        // clients are notified that the binary set changed so they can re-query get_binaries() and
+        // (e.g. the console) auto-load symbols. Model code must reach this through the component
+        // (comp->get_launcher()) rather than Controller::get(): the latter's inline singleton
+        // resolves to a separate per-.so instance.
+        void declare_binary(const std::string &path);
+        // The ELF binaries registered so far (snapshot copy). Queried by proxy clients via the
+        // get_binaries proxy command.
+        std::vector<std::string> get_binaries();
 
         double get_instant_power(double &dynamic_power, double &static_power, ControllerClient *client);
         double get_average_power(double &dynamic_power, double &static_power, ControllerClient *client);
@@ -163,6 +192,16 @@ namespace gv {
         // Static handler used as time event callback, used to stop engine when a step is reached,
         // for synchronous mode
         static void step_sync_handler(vp::Block *__this, vp::TimeEvent *event);
+        // Static handler invoked by ClockEngine::step_cycles when the requested cycle count is
+        // reached. Mirrors step_async_handler: stops the client and routes the step-end reply.
+        static void step_cycles_async_handler(void *arg);
+        // Interrupt the cycle-step outstanding for `client`, if any (the requested count was not
+        // reached): cancel its clock event and route an aborted step-end reply carrying `reason`,
+        // so a front-end blocked on the step unblocks and can explain why it stopped. No-op if the
+        // client has no step pending. Called when a client is stopped with a step outstanding (e.g.
+        // toolbar stop); a global stop such as a breakpoint would call this for every client. Must
+        // be called with the engine locked/halted (the clock event is canceled).
+        void abort_step_cycles(ControllerClient *client, const std::string &reason);
         // Allocate and setup the preallocated synchronous step event of a client.
         // Used when the client registers and again on restart, since step events are
         // attached to the step block of the current system.
@@ -199,6 +238,14 @@ namespace gv {
         vp::Component *instance;
         // Proxy
         GvProxy *proxy;
+        // ELF binaries registered by models via declare_binary; the authoritative list returned to
+        // proxy clients by get_binaries(). Accumulated here (not in the proxy) so it survives the
+        // proxy not yet existing at declaration time and covers binaries added during execution.
+        std::vector<std::string> declared_binaries;
+        // When a proxy is enabled, tells whether start() must block until a client connects. True
+        // for a config-enabled (standalone) proxy; false for an in-process host (the GUI) so the
+        // engine can start without an attached console.
+        bool proxy_wait = true;
         // Tell if time engine should be running. In asynchronous mode, there might be a delay
         // with the actual state of the engine
         bool running = false;
@@ -249,6 +296,9 @@ namespace gv {
         void report_stop() override;
         gv::PowerReport *report_get() override;
         void step(int64_t duration, bool wait=false, void *data=NULL) override;
+        // Step clock domain clock_id by exactly count cycles (proxy-internal, not part of the public
+        // Gvsoc embedding API). Async only; the proxy always uses async.
+        void step_cycles(int clock_id, int64_t count, bool wait=false, void *data=NULL);
         void step_until(int64_t timestamp, bool wait=false, void *data=NULL) override;
         int join() override;
         void lock() override;
@@ -291,6 +341,11 @@ namespace gv {
         gv::Gvsoc_user *user = NULL;
         // Step event used to stop engine when stepping in synchronous mode
         vp::TimeEvent *step_event = NULL;
+        // Cycle-step this client currently has outstanding, or nullptr. At most one per client
+        // (the client blocks on the reply before issuing another); different clients can each have
+        // one on their own clock domain. Set by step_cycles_async, cleared on normal completion
+        // (step_cycles_async_handler) or interruption (abort_step_cycles). Under the engine mutex.
+        StepCyclesReq *step_cycles_pending = nullptr;
     };
 
 };

@@ -38,6 +38,60 @@ vp::Event::Event(vp::Block &parent, const char *name, int width, gv::Vcd_event_t
     this->parent.traces.get_trace_engine()->check_event_active(this);
 }
 
+const char *vp::Event::get_description()
+{
+    // Plain events (e.g. vp::Signal) just expose their static description.
+    if (this->regfields == nullptr && this->reg_offset == nullptr)
+    {
+        return this->description ? this->description : "";
+    }
+
+    // Register event: serialize {"offset":N,"fields":[{n,b,w},...]} so the GUI
+    // can order registers by address and expand their bit-fields. Built here
+    // (lazily) because the generated register ctor fills regfields/reg_offset
+    // after this Event was constructed; declare/enable happen later, at start.
+    std::string result = "{";
+    bool first = true;
+
+    if (this->reg_offset != nullptr)
+    {
+        result += "\"offset\":" + std::to_string(*this->reg_offset);
+        first = false;
+    }
+
+    if (this->regfields != nullptr && this->regfields->size() != 0)
+    {
+        if (!first)
+            result += ",";
+        result += "\"fields\":[";
+        bool first_field = true;
+        for (vp::regfield *field: *this->regfields)
+        {
+            if (!first_field)
+                result += ",";
+            first_field = false;
+
+            // Escape the field name against quotes/backslashes in the JSON.
+            std::string fname;
+            for (char c: field->name)
+            {
+                if (c == '"' || c == '\\')
+                    fname += '\\';
+                fname += c;
+            }
+
+            result += "{\"n\":\"" + fname + "\",\"b\":" + std::to_string(field->bit) +
+                ",\"w\":" + std::to_string(field->width) + "}";
+        }
+        result += "]";
+    }
+
+    result += "}";
+
+    this->built_description = result;
+    return this->built_description.c_str();
+}
+
 typedef struct
 {
     vp::EventParseCallback callback;
@@ -387,7 +441,7 @@ void vp::Event::declare_to(gv::Vcd_user *user)
         clock_trace_name = this->parent.clock.get_engine()->clock_trace.get_path();
     }
     user->event_declare(this->path_get(), this->type, this->width,
-        this->description ? this->description : "", clock_trace_name);
+        this->get_description(), clock_trace_name);
 }
 
 void vp::Event::enable_set(bool enabled, vp::Event_file *file)
@@ -410,7 +464,7 @@ void vp::Event::enable_set(bool enabled, vp::Event_file *file)
             // [last-disable,T) on a re-enable), so the not-captured lead-in is blanked. Sent
             // synchronously here, before the value replay below closes nothing further.
             this->external_trace = vcd_user->event_enable(this->path_get(), this->type, this->width,
-                this->description ? this->description : "", clock_trace_name, true,
+                this->get_description(), clock_trace_name, true,
                 this->parent.time.get_time());
         }
         else if (file)
@@ -498,7 +552,7 @@ void vp::Event::enable_set(bool enabled, vp::Event_file *file)
         if (this->vcd_user && this->external_trace)
         {
             this->vcd_user->event_enable(this->path_get(), this->type, this->width,
-                this->description ? this->description : "", "", false, this->parent.time.get_time());
+                this->get_description(), "", false, this->parent.time.get_time());
         }
         this->dump_callback = NULL;
     }

@@ -39,6 +39,7 @@ subprocess.call('doxygen doxyfile', shell=True)
 _DOC_ROOT = Path(__file__).resolve().parent
 _REPO_ROOT = _DOC_ROOT.parents[3]  # .../gvsoc/engine/docs/developer_manual -> repo root
 
+_embedded_extensions = []
 if os.environ.get('GVSOC_MODULES'):
     # autodoc needs the installed Python packages (gvsoc.systree pulls gapylib,
     # which sits under $GVSOC_WORKDIR/install/bin). Add both install roots.
@@ -51,6 +52,14 @@ if os.environ.get('GVSOC_MODULES'):
     import component_pages  # noqa: E402
 
     component_pages.generate(_DOC_ROOT, _REPO_ROOT)
+
+    # Embed each module's docs/developer_manual tree (counterpart of CMake
+    # pulling in each module's CMakeLists.txt). Output goes under
+    # targets/_generated/ (gitignored).
+    sys.path.insert(0, str(_DOC_ROOT.parent / '_ext'))
+    import target_docs  # noqa: E402
+
+    _embedded_extensions = target_docs.generate(_DOC_ROOT, 'developer_manual')
 else:
     print('GVSOC_MODULES not set — skipping component page generation.')
     # Leave a stub so components/index.rst's toctree still resolves.
@@ -63,6 +72,17 @@ else:
         'component pages were generated. Rebuild via ``make doc`` (which '
         'exports ``GVSOC_MODULES``) to populate this section.\n'
     )
+    # Same stub for the embedded target documentation toctree.
+    _targets_stub = _DOC_ROOT / 'targets' / '_generated'
+    _targets_stub.mkdir(parents=True, exist_ok=True)
+    (_targets_stub / 'index.rst').write_text(
+        'Target documentation\n'
+        '====================\n\n'
+        '``GVSOC_MODULES`` was not set when the docs were built, so no '
+        'target-specific documentation was embedded. Rebuild via '
+        '``make doc`` (which exports ``GVSOC_MODULES``) to populate this '
+        'section.\n'
+    )
 
 # -- General configuration ---------------------------------------------------
 
@@ -74,6 +94,12 @@ extensions = [
     'sphinx.ext.napoleon',
     'breathe',
 ]
+
+# Extensions required by the embedded module developer docs, picked up from
+# each module's standalone conf.py.
+for _ext in _embedded_extensions:
+    if _ext not in extensions:
+        extensions.append(_ext)
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
