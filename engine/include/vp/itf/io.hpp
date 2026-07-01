@@ -186,6 +186,10 @@ namespace vp {
     uint64_t initiator_addr;
     vp::IoReq *parent_req;
 
+	// Fault Injection fields
+    bool fault_upset_request=false;
+	bool hash_request=false;
+	uint8_t mask;
 
   private:
     IoReq *next;
