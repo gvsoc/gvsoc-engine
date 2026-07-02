@@ -7,10 +7,16 @@ Introduction
 The memory checker, referred to as memcheck, is a feature that detects invalid accesses made by
 the simulated software.
 
-It currently detects two kinds of invalid accesses:
+It currently detects the following kinds of invalid accesses:
 
 - Uninitialized accesses
 - Buffer underflows and overflows
+- Use-after-free
+- Cross-region accesses (an access landing in another memory than the one the buffer was
+  allocated from)
+
+All reports use the real physical addresses of the simulated system, so they can directly be
+correlated with linker maps, traces, and debugger output.
 
 Usage
 +++++
@@ -19,57 +25,65 @@ Memcheck can be enabled by adding the *--memcheck* option: ::
 
     gvrun --target gap.gap9.evk --parameter binary=test build run --memcheck
 
-This is the only option available for this feature.
+On targets running PulpOS, the allocator instrumentation must also be compiled in by setting the
+*pulpos/kernel.memcheck* parameter to true (see `Runtime Support`_ below).
 
 Once a fault is detected, a warning is dumped by GVSOC: ::
 
-  515864014: 19271: [/chip/soc/fc/regfile] Conditional jump depends on uninitialized register (reg: 0)
+  515864014: 19271: [/chip/soc/fc/core/regfile] Conditional jump depends on uninitialised register (reg: 14)
   Input error: Platform returned an error (exitcode: 1)
 
 By default, GVSOC exits when such a warning is raised. To receive the warning but prevent GVSOC
-from exiting, add the *--no-werror* option.
+from exiting, add the *--no-werror* option. The faulty access itself always proceeds normally, so
+the program behavior does not depend on memcheck being enabled.
 
 Possible errors are explained in the following sections.
 
-Buffer Underflow/Overflow
-+++++++++++++++++++++++++
+Buffer Tracking
++++++++++++++++
 
 Behavior
 ........
 
-To detect if an access falls before or after a buffer, GVSOC inserts free space before and after
-the buffer. This space is declared in a special way in the memory model, and any access to this
-space triggers a warning.
+Each dynamic allocation is registered to a global registry through a semi-hosting call and gets a
+unique buffer ID. The ID is attached to the register holding the pointer returned by the
+allocator, and the core model propagates it alongside the pointer:
 
-Since memory in the simulated system can be small, GVSOC remaps buffers to a different location
-using a kind of virtual address in order to get more space and be able to insert space between
-and after the buffers. This explains why addresses may look strange when the memcheck
-feature is enabled.
+- Register moves, pointer arithmetic (add/sub with an offset) and alignment masking keep the ID.
+- Storing the pointer to memory records the ID in a shadow location, and loading it back restores
+  it, so pointers spilled to the stack or kept in data structures keep naming their buffer. This
+  also works across cores, for instance when a pointer is passed to a cluster core through a
+  shared structure.
+- Operations that do not produce a pointer (constants, shifts, multiplications, the difference of
+  two pointers to the same buffer) drop the ID.
 
-Buffers are remapped by the memory allocator using two special semi-hosting calls:
+Every load and store is then checked against the bounds of the buffer its address derives from,
+by the core model at issue time. The address is first folded to its canonical global form using
+the same alias windows the platform declares for watchpoints, so buffers accessed through a
+master-local alias are checked correctly. An access landing in a different declared region than
+the buffer's one is reported as a cross-region access naming both.
 
-- To inform the memory model about the valid buffers
-- To get the virtual address where the buffer has been remapped
+Freeing a buffer marks it as freed in the registry but its ID is never reused, so a stale pointer
+kept by the application keeps naming the freed buffer and any access through it is reported as
+use-after-free, even after the allocator has recycled the memory.
 
-The memory allocator does the allocation with the real address to still see fragmentation and
-exhaustion issues but returns the virtual address to the caller, allowing the memory model to detect
-faults.
+Since this mechanism is based on dynamic allocations, no fault can be detected on static variables
+or on the stack. Any faulty access to a buffer declared as a global variable will not be detected.
 
-The semi-hosting allocation call translates the real address into a virtual one and inserts free
-space before and after.
+Coverage relies on the ID following the pointer. It is dropped when the pointer takes a path the
+core model cannot track, in which case the access is silently not checked (no false positives):
 
-The deallocation call translates back into the real address.
-
-Since this mechanism is based on dynamic allocations, no fault can be detected on static variables.
-Any faulty access to a buffer declared as a global variable will not be detected.
+- Pointers reconstructed through integer arithmetic that does not qualify as pointer arithmetic
+  (XOR tricks, shifts, manual bit packing).
+- Sub-word or misaligned pointer stores (the shadow tracks pointer-sized aligned slots).
+- Accesses done by DMA engines or hardware accelerators.
+- Pointer values stored to memory across paths that rebuild requests (e.g. the SoC-cluster
+  bridge adapters), which drop the shadow sideband.
 
 Faults
 ......
 
-The buffer under/overflow checks only detect access outside the declared buffer that has been
-dynamically allocated.
-
-Such a fault can be triggered with the following code:
+An overflow can be triggered with the following code:
 
 .. code-block:: C
 
@@ -80,23 +94,24 @@ It is reported like this:
 
 .. code-block:: shell
 
-    525310849: 35826: [/chip/soc/l2_virtual/trace] Write access outside buffer (offset: 0x7618)
-    525310849: 35826: [/chip/soc/l2_virtual/trace] Write access is 1 byte(s) after buffer (buffer_offset: 0x7218, buffer_size: 0x400)
-    525310849: 35826: [/chip/soc/fc/lsu] Invalid access (pc: 0x1c010370, offset: 0x1c197618, size: 0x1, is_write: 1)
+    280019297: 23591: [/chip/soc/fc/core/lsu] Invalid write of 1 bytes at 0x1c001678, 0 bytes after buffer #1 (region: l2_priv, base: 0x1c001638, size: 0x400, allocated at pc 0x1c010a10 ra 0x1c0109fc)
     Input error: Platform returned an error (exitcode: 1)
 
-The memory first informs about the fault and specifies whether the access is before or after the
-buffer, and how far in terms of bytes.
+The report names the faulting core and gives the real address of the access, the distance to the
+buffer, the buffer identity and bounds, and the program counter and return address of the
+allocation call site.
 
-The fault is then reported to the faulting core as an invalid bus access, triggering the warning
-and exit.
+A use-after-free is reported like this:
 
-The reported buffer is the one closest to the access, either its last byte when searching before
-the access or its first byte when searching after.
+.. code-block:: shell
 
-Since buffer under/overflows are detected by inserting empty space between buffers, it is possible
-that the wrong buffer is reported if the access is far away from a buffer. Even worse, it can fall
-into another buffer and no fault is reported in this case.
+    285768075: 25703: [/chip/soc/fc/core/lsu] Invalid read of 1 bytes at 0x1c001638 through a pointer to freed buffer #1 (region: l2_priv, base: 0x1c001638, size: 0x40, allocated at pc 0x1c010a10 ra 0x1c0109fc, freed at pc 0x1c010a4a ra 0x1c010ae2)
+
+And an access landing in another region like this:
+
+.. code-block:: shell
+
+    321594355: 46229: [/chip/soc/fc/core/lsu] Invalid read of 1 bytes at 0x1c012000 in region l2_shared through a pointer to another region's buffer #1 (region: l1, base: 0x10000000, size: 0x20, allocated at pc 0x1c0104c0 ra 0x1c0104a4)
 
 Uninitialized Accesses
 +++++++++++++++++++++++
@@ -113,9 +128,7 @@ Any write access to the memory model turns the corresponding valid bits into ini
 Any read access to the memory model reports the valid bits to the initiator, which takes them into
 account.
 
-The whole memory is set as uninitialized when the simulation starts. Memory deallocation also sets
-the entire chunk being freed as uninitialized, since it is not valid to access this memory until it
-is written again.
+The whole memory is set as uninitialized when the simulation starts.
 
 Currently, only the core model checks them. It allows read accesses to uninitialized locations but
 raises a fault if an uninitialized value is used for:
@@ -147,57 +160,22 @@ This will report the following warning:
 
 .. code-block:: shell
 
-    559544241: 36866: [/chip/soc/fc/regfile] Conditional jump depends on uninitialized register (reg: 0)
+    559544241: 36866: [/chip/soc/fc/core/regfile] Conditional jump depends on uninitialised register (reg: 14)
     Input error: Platform returned an error (exitcode: 1)
 
 The second kind of error occurs when the core tries to use an uninitialized value to build an
-address and accesses it.
-
-This can happen with the following code:
-
-.. code-block:: C
-
-    uint32_t *buff = pi_malloc(1024);
-
-    buff[128] = 0x1c040000;
-
-    pi_free(buff, 1024);
-
-    buff = pi_malloc(1024);
-    *(uint32_t *)buff[128] = 0;
-
-To trigger it, the idea is to read a pointer from an uninitialized location and use it to perform
-an access.
-
-The goal is to access a valid location using a valid pointer retrieved from an uninitialized
-location. This type of bug is tricky to debug because it seems valid at first since the address
-looks good. Memcheck detects that the pointer is still invalid because it is built from an
-uninitialized location.
-
-This happens when a buffer is allocated, valid values are written into it, the buffer is freed,
-then the same buffer is allocated, and data is read from it without initializing it.
-
-This use-case is reproduced by the code. A buffer is allocated, a valid address is written, the
-buffer is freed, then reallocated, and an access is made from the pointer written earlier. A valid
-pointer is obtained, but the code is invalid.
-
-Note that this code works if the memory allocator returns the same chunk, which may not always be
-true.
-
-This code will trigger the following warning:
+address and accesses it. It is reported as:
 
 .. code-block:: shell
 
-    511737517: 34945: [/chip/soc/fc/regfile] Access address depends on uninitialized register (reg: 0)
+    511737517: 34945: [/chip/soc/fc/core/regfile] Access address depends on uninitialised register (reg: 14)
     Input error: Platform returned an error (exitcode: 1)
 
 Runtime Support
 +++++++++++++++
 
-As mentioned earlier, memory allocations and deallocations must be declared using two special
-semi-hosting calls.
-
-These calls are accessible using the gvsoc target header (gvsoc.h) by calling these functions:
+Memory allocators running on the target must declare their allocations using two semi-hosting
+calls, accessible through the gvsoc target header (gvsoc.h):
 
 .. code-block:: C
 
@@ -205,11 +183,34 @@ These calls are accessible using the gvsoc target header (gvsoc.h) by calling th
 
     static inline void *gv_memcheck_mem_free(int mem_id, void *ptr, size_t size);
 
-The first argument is the memory identifier where the operation is performed. Each memory in the
-simulated system is assigned an identifier that must be provided here.
+The first argument is the memory region identifier where the operation is performed. Each
+allocator-backed memory region of the simulated system is assigned an identifier on the platform
+side (see `Platform Support`_), and the same value must be passed here.
 
-The other arguments describe the chunk being allocated or deallocated by the memory allocator in
-the simulated software.
+*gv_memcheck_mem_alloc* registers an allocated chunk and returns the pointer with its buffer ID
+attached, so its return value is what the allocator must hand back to the caller.
+*gv_memcheck_mem_free* unregisters the chunk and returns the pointer with its ID stripped, so
+that the allocator's own metadata accesses to the recycled chunk stay silent while stale
+application copies keep triggering use-after-free reports. Both calls return the pointer
+unchanged in value.
+
+On PulpOS, the standard allocator (pi_mem_alloc / pi_mem_free and their L1/L2 variants) is
+already instrumented. The instrumentation is compiled in by setting the *pulpos/kernel.memcheck*
+build parameter to true, and is only active on the gvsoc platform.
+
+Platform Support
+++++++++++++++++
+
+On the platform side, a target wires memcheck by declaring its allocator-backed regions with the
+*utils.memcheck_regions* declaration component (a pure declaration carrier, like the watchpoint
+alias one): one entry per region with its ID, name, global base and size. Nothing in the request
+path needs any memcheck configuration; the memories only maintain the generic shadow storage,
+whatever the bank topology.
+
+The buffer checks run in the core models with the address the program computed. If a master
+reaches a memory through a local alias, declare the alias window with
+*utils.watchpoint_alias* (needed for watchpoints anyway): the cores fold accessed addresses
+through the same table before checking.
 
 GDB Support
 +++++++++++
@@ -217,12 +218,11 @@ GDB Support
 The memcheck warnings provide information about the invalid access but not about the code that
 triggered the fault.
 
-To get more information, GDB can be connected. Any memcheck fault triggers a bus error, which is
-caught by GDB. GDB then shows the source code where the bus error occurred and gives control back
-to the user.
+To get more information, GDB can be connected. Any memcheck register fault triggers a bus error,
+which is caught by GDB. GDB then shows the source code where the bus error occurred and gives
+control back to the user.
 
-Once GDB is connected, the code shown in the first buffer under/overflow error will make GDB print
-the following message:
+Once GDB is connected, an uninitialized-register fault makes GDB print the following message:
 
 .. code-block:: shell
 

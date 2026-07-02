@@ -192,6 +192,9 @@ namespace vp {
         // Fold an address issued by `master_path` to its canonical (global) form using the declared
         // aliases. A global address (in no local window) is returned unchanged.
         uint64_t normalize_addr(const std::string &master_path, uint64_t addr);
+        // Full alias table, for models resolving their own windows once (e.g. the core
+        // memcheck folds addresses per access, so it caches its windows at reset).
+        const std::vector<AliasRegion> &get_aliases() { return this->aliases; }
 
         // Fast gate read inline by BlockTrace::declare_access: true iff at least one watchpoint set.
         bool watchpoints_active = false;

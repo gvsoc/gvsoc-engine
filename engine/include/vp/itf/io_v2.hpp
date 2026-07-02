@@ -190,6 +190,24 @@ class IoReq : public vp::QueueElem {
     uint8_t *get_second_data() { return this->second_data; }
     void set_second_data(uint8_t *data) { this->second_data = data; }
 
+    // Memcheck shadow transport, only active in debug builds (VP_MEMCHECK_ACTIVE)
+    // with memory checking enabled. memcheck_data points to a per-byte validity
+    // shadow of `data` (0xFF = initialized); NULL means the initiator carries no
+    // shadow, in which case targets assume written data is initialized.
+    // memcheck_data_id is the provenance of the transferred word: on a write it is
+    // the ID attached to the stored register, on a read the target returns the ID
+    // stored in the accessed word slot, so that pointers spilled to memory keep
+    // their provenance. The buffer checks themselves happen in the core models at
+    // issue time, requests do not carry the address provenance.
+    uint8_t *get_memcheck_data() { return this->memcheck_data; }
+    void set_memcheck_data(uint8_t *data) { this->memcheck_data = data; }
+
+    uint8_t *get_second_memcheck_data() { return this->second_memcheck_data; }
+    void set_second_memcheck_data(uint8_t *data) { this->second_memcheck_data = data; }
+
+    uint32_t get_memcheck_data_id() { return this->memcheck_data_id; }
+    void set_memcheck_data_id(uint32_t id) { this->memcheck_data_id = id; }
+
     IoRespStatus get_resp_status() { return this->status; }
     void set_resp_status(IoRespStatus status) { this->status = status; }
 
@@ -231,12 +249,25 @@ class IoReq : public vp::QueueElem {
     int64_t get_full_latency() const { return this->latency + this->duration; }
 
     // Reset per-send fields. Call before resubmitting a request object.
-    void prepare() { this->latency = 0; this->duration = 0; this->status = IO_RESP_OK; }
+    void prepare()
+    {
+        this->latency = 0; this->duration = 0; this->status = IO_RESP_OK;
+#ifdef VP_MEMCHECK_ACTIVE
+        this->memcheck_data = NULL;
+        this->second_memcheck_data = NULL;
+        this->memcheck_data_id = 0;
+#endif
+    }
 
     uint64_t addr;
     uint8_t *data;
     // Non-initialized flags for additional atomics data
     uint8_t *second_data;
+    // Memcheck shadow transport, see the accessors above. Kept unconditionally in
+    // the struct so the request layout does not depend on VP_MEMCHECK_ACTIVE.
+    uint8_t *memcheck_data = NULL;
+    uint8_t *second_memcheck_data = NULL;
+    uint32_t memcheck_data_id = 0;
     uint64_t size;
     IoReqOpcode opcode;
     // Response status. Defaults to IO_RESP_OK; slaves only need to set it
