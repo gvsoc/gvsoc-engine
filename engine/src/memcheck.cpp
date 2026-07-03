@@ -23,6 +23,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include "vp/memcheck.hpp"
+#include "vp/controller.hpp"
 
 
 static std::string vp_memcheck_format(const char *fmt, ...)
@@ -36,10 +37,26 @@ static std::string vp_memcheck_format(const char *fmt, ...)
 }
 
 
-vp::MemCheck::MemCheck()
+vp::MemCheck::MemCheck(gv::Controller *launcher)
+: launcher(launcher)
 {
     // ID 0 means "no buffer", keep the slot unused
     this->buffers.push_back(NULL);
+}
+
+
+bool vp::MemCheck::fault_stop()
+{
+    // Stop like a watchpoint hit when a front-end is attached (gvsoc-gui3 opens
+    // an in-process proxy, gvconsole connects to one), so the fault can be
+    // inspected and execution resumed. In batch mode the caller applies the
+    // werror policy instead.
+    if (this->launcher != NULL && this->launcher->has_frontend())
+    {
+        this->launcher->syscall_stop_handle();
+        return true;
+    }
+    return false;
 }
 
 
@@ -164,6 +181,23 @@ std::string vp::MemCheck::buffer_desc(vp::MemCheckBuffer *buffer)
 }
 
 
+void vp::MemCheck::fault_fill(const char *kind, uint64_t addr, uint64_t size,
+    bool is_write, uint32_t buffer_id, const std::string &message)
+{
+    this->fault.valid = true;
+    this->fault.kind = kind;
+    this->fault.addr = addr;
+    this->fault.size = size;
+    this->fault.is_write = is_write;
+    this->fault.buffer_id = buffer_id;
+    this->fault.message = message;
+    // The reporting core completes time, core path and pc before stopping
+    this->fault.time = 0;
+    this->fault.core = "";
+    this->fault.pc = 0;
+}
+
+
 bool vp::MemCheck::check_access(uint64_t addr, uint64_t size,
     uint32_t buffer_id, bool is_write, std::string &error)
 {
@@ -186,12 +220,15 @@ bool vp::MemCheck::check_access(uint64_t addr, uint64_t size,
 
     const char *dir = is_write ? "write" : "read";
 
+    this->fault.valid = false;
+
     if (buffer->freed)
     {
         error = vp_memcheck_format(
             "Invalid %s of %" PRIu64 " bytes at 0x%" PRIx64
             " through a pointer to freed ", dir, size, addr)
             + this->buffer_desc(buffer);
+        this->fault_fill("use-after-free", addr, size, is_write, buffer_id, error);
         return false;
     }
 
@@ -208,6 +245,7 @@ bool vp::MemCheck::check_access(uint64_t addr, uint64_t size,
                 " in region %s through a pointer to another region's ",
                 dir, size, addr, landing_region->name.c_str())
                 + this->buffer_desc(buffer);
+            this->fault_fill("cross-region", addr, size, is_write, buffer_id, error);
             return false;
         }
 
@@ -218,6 +256,8 @@ bool vp::MemCheck::check_access(uint64_t addr, uint64_t size,
             "Invalid %s of %" PRIu64 " bytes at 0x%" PRIx64
             ", %" PRIu64 " bytes %s ", dir, size, addr, distance,
             after ? "after" : "before") + this->buffer_desc(buffer);
+        this->fault_fill(after ? "overflow" : "underflow", addr, size, is_write,
+            buffer_id, error);
         return false;
     }
 

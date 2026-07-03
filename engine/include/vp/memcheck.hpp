@@ -26,8 +26,14 @@
 #include <map>
 #include <vector>
 
+namespace gv
+{
+    class Controller;
+};
+
 namespace vp
 {
+
     /**
      * @brief Descriptor of one tracked allocation.
      *
@@ -75,6 +81,37 @@ namespace vp
     };
 
     /**
+     * @brief Description of the last memcheck fault, for front-ends.
+     *
+     * Filled when a fault is detected; queried by the proxy "memcheck_status"
+     * command so consoles and GUIs can render a structured report and navigate to
+     * the fault. The buffer details can be retrieved from the registry with
+     * buffer_id.
+     */
+    class MemCheckFaultInfo
+    {
+    public:
+        bool valid = false;
+        // Engine time of the faulting access
+        int64_t time = 0;
+        // Component path of the faulting core
+        std::string core;
+        // Faulting instruction
+        uint64_t pc = 0;
+        // Access description
+        uint64_t addr = 0;
+        uint8_t size = 0;
+        bool is_write = false;
+        // One of: overflow, underflow, use-after-free, cross-region,
+        // uninit-branch, uninit-address
+        std::string kind;
+        // Faulty buffer, 0 for uninitialized-value faults
+        uint32_t buffer_id = 0;
+        // Full formatted report
+        std::string message;
+    };
+
+    /**
      * @brief Global allocation registry for memory checking.
      *
      * One instance per top-level, reached through vp::Block::get_memcheck(). Only
@@ -90,7 +127,7 @@ namespace vp
     class MemCheck
     {
     public:
-        MemCheck();
+        MemCheck(gv::Controller *launcher);
 
         /**
          * @brief Declare a checked region.
@@ -138,9 +175,29 @@ namespace vp
         // Find the declared region containing this address, for report naming
         MemCheckRegion *get_region_at(uint64_t addr);
 
+        /**
+         * @brief Pause the simulation on a fault when a front-end is attached.
+         *
+         * When a proxy client is connected (gvsoc-gui3 opens an in-process proxy,
+         * gvconsole connects to one), the simulation is stopped like on a
+         * watchpoint hit so the fault can be inspected and execution resumed.
+         *
+         * @return true if a front-end was attached and the simulation stopped;
+         *         false in batch mode, where the caller applies the werror policy.
+         */
+        bool fault_stop();
+
+        // Last detected fault. check_access() fills the access description on
+        // failure; the reporting core completes it (core, pc, time) before
+        // stopping. Overwritten by each new fault.
+        MemCheckFaultInfo fault;
+
     private:
         std::string buffer_desc(MemCheckBuffer *buffer);
+        void fault_fill(const char *kind, uint64_t addr, uint64_t size,
+            bool is_write, uint32_t buffer_id, const std::string &message);
 
+        gv::Controller *launcher;
         // Descriptors indexed by ID. Entry 0 is unused since ID 0 means "no buffer".
         std::vector<MemCheckBuffer *> buffers;
         std::map<int, MemCheckRegion> regions;

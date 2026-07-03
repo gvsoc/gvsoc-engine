@@ -24,6 +24,8 @@
 #include <string>
 #include <stdio.h>
 #include <vp/vp.hpp>
+#include <vp/memcheck.hpp>
+#include <inttypes.h>
 #include <stdio.h>
 #include "string.h"
 #include <sstream>
@@ -630,6 +632,59 @@ void gv::GvProxySession::proxy_loop()
                         snprintf(buf, sizeof(buf), "hit=0");
                     std::unique_lock<std::mutex> lock(this->proxy->mutex);
                     fprintf(reply_sock, "req=%s;msg=%s\n", req.c_str(), buf);
+                    fflush(reply_sock);
+                    lock.unlock();
+                }
+                else if (words[0] == "memcheck_status")
+                {
+                    // Structured report of the last memcheck fault. Fixed key=value
+                    // fields first; msg= comes last and takes the line remainder
+                    // since the formatted report contains spaces.
+                    vp::MemCheck *mc = this->proxy->top->get_memcheck();
+                    const vp::MemCheckFaultInfo &fault = mc->fault;
+                    std::string buf;
+                    if (fault.valid)
+                    {
+                        char tmp[1024];
+                        snprintf(tmp, sizeof(tmp),
+                            "hit=1 kind=%s time=%" PRId64 " core=%s pc=0x%" PRIx64
+                            " addr=0x%" PRIx64 " size=%d is_write=%d buffer=%u",
+                            fault.kind.c_str(), fault.time, fault.core.c_str(),
+                            fault.pc, fault.addr, fault.size, fault.is_write ? 1 : 0,
+                            fault.buffer_id);
+                        buf = tmp;
+                        vp::MemCheckBuffer *buffer = mc->get_buffer(fault.buffer_id);
+                        if (buffer != NULL)
+                        {
+                            vp::MemCheckRegion *region = mc->get_region(buffer->mem_id);
+                            snprintf(tmp, sizeof(tmp),
+                                " region=%s base=0x%" PRIx64 " buf_size=0x%" PRIx64
+                                " alloc_pc=0x%" PRIx64 " alloc_ra=0x%" PRIx64
+                                " freed=%d free_pc=0x%" PRIx64 " free_ra=0x%" PRIx64,
+                                region != NULL ? region->name.c_str() : "??",
+                                buffer->base, buffer->size, buffer->alloc_pc,
+                                buffer->alloc_ra, buffer->freed ? 1 : 0,
+                                buffer->free_pc, buffer->free_ra);
+                            buf += tmp;
+                        }
+                        buf += " msg=" + fault.message;
+                    }
+                    else
+                    {
+                        buf = "hit=0";
+                    }
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=%s\n", req.c_str(), buf.c_str());
+                    fflush(reply_sock);
+                    lock.unlock();
+                }
+                else if (words[0] == "memcheck_clear")
+                {
+                    // Consume the last fault so front-ends do not re-report it on
+                    // the next stop
+                    this->proxy->top->get_memcheck()->fault.valid = false;
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=done\n", req.c_str());
                     fflush(reply_sock);
                     lock.unlock();
                 }

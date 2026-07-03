@@ -927,6 +927,9 @@ class GvsocConsole(cmd.Cmd):
             result = self.proxy._send_cmd('watchpoint_status')
             if result and 'hit=1' in result:
                 return (None, 'watch', result.strip())
+        result = self.proxy._send_cmd('memcheck_status')
+        if result and 'hit=1' in result:
+            return (None, 'memcheck', result.strip())
         return None
 
     def _is_halted(self):
@@ -961,6 +964,8 @@ class GvsocConsole(cmd.Cmd):
                     loc += f" <{sym}>"
                 label = f"Breakpoint {bp_id}" if bp_id is not None else "Breakpoint"
                 print(f"{label} hit at {loc}{core_note}")
+        elif kind == 'memcheck':
+            self._print_memcheck_hit(result)
         else:
             # Central watchpoint: the status reports the master (any master, not only cores).
             addr = None
@@ -984,6 +989,47 @@ class GvsocConsole(cmd.Cmd):
                 label = f"{wkind} watchpoint {wp_id}" if wp_id is not None else f"{wkind} watchpoint"
                 master_note = f" by {master}" if master else ""
                 print(f"{label} hit at {loc}{master_note}")
+
+    def _print_memcheck_hit(self, result):
+        """Render the structured memcheck fault reported by memcheck_status, then
+        consume it so the next stop does not re-report it."""
+        fields = {}
+        head, _, msg = result.partition(' msg=')
+        for part in head.split():
+            key, _, value = part.partition('=')
+            fields[key] = value
+
+        def num(key, default=0):
+            try:
+                return int(fields.get(key, default), 0)
+            except (TypeError, ValueError):
+                return default
+
+        def loc(addr):
+            out = f"0x{addr:08x}"
+            sym = self._addr_to_symbol(addr)
+            if sym:
+                out += f" <{sym}>"
+            return out
+
+        kind = fields.get('kind', '?')
+        print(f"Stopped on memcheck fault ({kind})")
+        core = fields.get('core', '')
+        print(f"  core   : {core:<28} pc: {loc(num('pc'))}")
+        if kind in ('uninit-branch', 'uninit-address'):
+            print(f"  fault  : {msg}")
+        else:
+            access = 'write' if fields.get('is_write') == '1' else 'read'
+            print(f"  access : {access} {num('size')} byte(s) at {loc(num('addr'))}")
+            if 'base' in fields:
+                base = num('base')
+                size = num('buf_size')
+                print(f"  buffer : #{num('buffer')} region {fields.get('region', '?')}, "
+                      f"0x{base:08x} .. 0x{base + size - 1:08x} ({size} bytes)")
+                print(f"  alloc  : pc {loc(num('alloc_pc'))}  ra {loc(num('alloc_ra'))}")
+                if fields.get('freed') == '1':
+                    print(f"  freed  : pc {loc(num('free_pc'))}  ra {loc(num('free_ra'))}")
+        self.proxy._send_cmd('memcheck_clear')
 
     def _resume_if_halted(self):
         """Clear a pending breakpoint (per-core) or watchpoint (central) hit so the next run makes
@@ -1584,6 +1630,14 @@ class GvsocConsole(cmd.Cmd):
                 print(f"\n[!] {msg}")
             except queue.Empty:
                 break
+        # An engine-side stop (e.g. a memcheck fault) arrives asynchronously as a
+        # syscall_stop notification on the reader thread, without a user breakpoint.
+        # Surface it here so a fire-and-forget `run` still reports the fault on the
+        # next prompt. _check_breakpoint_hit prints nothing when there is no hit.
+        reader = self.proxy.reader if self.proxy else None
+        if reader is not None and getattr(reader, 'syscall_stop', False):
+            reader.syscall_stop = False
+            self._check_breakpoint_hit()
 
     def _update_prompt(self):
         """Update prompt to reflect simulation state."""

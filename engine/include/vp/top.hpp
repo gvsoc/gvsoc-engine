@@ -39,6 +39,7 @@ namespace vp {
       js::Config *gv_config;
 
       vp::TimeEngine *get_time_engine() { return this->time_engine; };
+      vp::MemCheck *get_memcheck() { return this->memcheck; };
       vp::TraceEngine *get_trace_engine() { return this->trace_engine; };
       vp::PowerEngine *get_power_engine() { return this->power_engine; };
       vp::StatsEngine *get_stats_engine() { return this->stats_engine; };

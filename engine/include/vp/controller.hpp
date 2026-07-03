@@ -135,6 +135,11 @@ namespace gv {
         // Can be called to handle a semi-hosting stop
         void syscall_stop_handle();
 
+        // True when an interactive front-end is attached (a proxy is open:
+        // gvsoc-gui3 opens an in-process one, gvconsole connects to one). Used to
+        // pause on faults (e.g. memcheck) instead of exiting.
+        bool has_frontend() { return this->proxy != NULL; }
+
         // Register an ELF binary a model has gained access to (statically at reset, or dynamically at
         // run time e.g. via semi-hosting). The path is accumulated in the engine and connected proxy
         // clients are notified that the binary set changed so they can re-query get_binaries() and
