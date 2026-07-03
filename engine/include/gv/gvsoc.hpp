@@ -37,8 +37,9 @@ namespace gv {
      * v4 == TreeBinding carries master/slave signature labels (layout change).
      * v5 == GvsocConf gains proxy_enabled (layout change).
      * v6 == Gvsoc gains the Stdout base for the console-output channel (vtable layout change).
+     * v7 == Gvsoc gains get_memcheck_fault() (appended vtable slot).
      */
-    #define GV_API_VERSION 6
+    #define GV_API_VERSION 7
 
     /**
      * Return the GV_API_VERSION the engine was built with.
@@ -712,6 +713,41 @@ namespace gv {
     };
 
     /**
+     * Description of the last memory-checker fault, for front-ends (e.g. the GUI
+     * fault panel). Filled by get_memcheck_fault() from the engine's registry.
+     */
+    class MemcheckFault
+    {
+    public:
+        bool valid = false;
+        // Engine time of the faulting access
+        int64_t time = 0;
+        // Component path of the faulting core, faulting instruction
+        std::string core;
+        uint64_t pc = 0;
+        // Access description
+        uint64_t addr = 0;
+        uint8_t size = 0;
+        bool is_write = false;
+        // overflow / underflow / use-after-free / cross-region / uninit-branch /
+        // uninit-address
+        std::string kind;
+        // Full formatted report line
+        std::string message;
+        // Faulty buffer, 0 for uninitialized-value faults; the fields below are
+        // only meaningful when buffer_id != 0
+        uint32_t buffer_id = 0;
+        std::string region;
+        uint64_t buffer_base = 0;
+        uint64_t buffer_size = 0;
+        uint64_t alloc_pc = 0;
+        uint64_t alloc_ra = 0;
+        bool freed = false;
+        uint64_t free_pc = 0;
+        uint64_t free_ra = 0;
+    };
+
+    /**
      * GVSOC interface
      *
      * Gather all the methods which can be called to control GVSOC execution and other features
@@ -964,6 +1000,19 @@ namespace gv {
          * restart() (and would have no slot for it) rather than calling into a missing entry.
          */
         virtual void restart() {}
+
+        /**
+         * Get the last memory-checker fault, if any.
+         *
+         * Returns true and fills `out` when the memory checker has recorded a
+         * fault (e.g. a buffer overflow that paused the simulation); false
+         * otherwise. Used by front-ends to display the fault and navigate to it.
+         *
+         * NOTE: declared last on purpose so the vtable slots of the existing
+         * entries are unchanged; only this new slot is added. GV_API_VERSION is
+         * bumped accordingly.
+         */
+        virtual bool get_memcheck_fault(MemcheckFault &out) { return false; }
     };
 
 

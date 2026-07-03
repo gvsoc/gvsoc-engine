@@ -308,6 +308,7 @@ namespace gv {
         void bind(gv::Gvsoc_user *user) override;
         void close() override;
         void run() override;
+        bool get_memcheck_fault(gv::MemcheckFault &out) override;
         void start() override;
         void restart() override;
         void flush() override;

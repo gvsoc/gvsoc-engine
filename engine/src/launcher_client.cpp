@@ -23,6 +23,7 @@
 
 #include <vp/vp.hpp>
 #include <gv/gvsoc.hpp>
+#include <vp/memcheck.hpp>
 #include <vp/proxy.hpp>
 #include <vp/controller.hpp>
 #include <vp/proxy_client.hpp>
@@ -117,6 +118,43 @@ void gv::ControllerClient::run()
     {
         gv::Controller::get().run_sync();
     }
+}
+
+bool gv::ControllerClient::get_memcheck_fault(gv::MemcheckFault &out)
+{
+    vp::MemCheck *mc = gv::Controller::get().handler->get_memcheck();
+    const vp::MemCheckFaultInfo &fault = mc->fault;
+    if (!fault.valid)
+    {
+        return false;
+    }
+
+    out.valid = true;
+    out.time = fault.time;
+    out.core = fault.core;
+    out.pc = fault.pc;
+    out.addr = fault.addr;
+    out.size = fault.size;
+    out.is_write = fault.is_write;
+    out.kind = fault.kind;
+    out.message = fault.message;
+    out.buffer_id = fault.buffer_id;
+
+    vp::MemCheckBuffer *buffer = mc->get_buffer(fault.buffer_id);
+    if (buffer != NULL)
+    {
+        vp::MemCheckRegion *region = mc->get_region(buffer->mem_id);
+        out.region = region != NULL ? region->name : "??";
+        out.buffer_base = buffer->base;
+        out.buffer_size = buffer->size;
+        out.alloc_pc = buffer->alloc_pc;
+        out.alloc_ra = buffer->alloc_ra;
+        out.freed = buffer->freed;
+        out.free_pc = buffer->free_pc;
+        out.free_ra = buffer->free_ra;
+    }
+
+    return true;
 }
 
 void gv::ControllerClient::flush()
