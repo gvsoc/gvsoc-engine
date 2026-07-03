@@ -337,20 +337,26 @@ class GvsocConsole(cmd.Cmd):
         self._resume_if_halted()
         arg = arg.strip()
         if not arg:
+            # Free-run at full engine speed and block until the engine stops itself
+            # (a breakpoint/watchpoint hit, a memcheck fault, or the program ending)
+            # or Ctrl-C. The engine notifies us on any such stop, so there is no need
+            # to step in small chunks and poll. _check_breakpoint_hit reports whichever
+            # of breakpoint / watchpoint / memcheck fired (nothing if none did).
             if self.breakpoints or self.watchpoints:
-                # Free-run at full engine speed; the engine stops itself and notifies us when a
-                # breakpoint/watchpoint is hit (see ISS stop_for_debug), so there is no need to step
-                # in small chunks and poll — which used to make a breakpointed run ~100x slower.
                 print("Running until breakpoint or end...")
-                self.proxy.run()
+            self.proxy.run()
+            try:
                 hit = self.proxy.reader.wait_debug_stop()
-                if self.proxy.reader.sim_has_exited:
-                    print("Simulation exited.")
-                elif hit:
-                    self._check_breakpoint_hit()
+            except KeyboardInterrupt:
+                self.proxy.stop()
+                print("Interrupted.")
+                return
+            if self.proxy.reader.sim_has_exited:
+                print("Simulation exited.")
+            elif hit:
+                self._check_breakpoint_hit()
             else:
-                self.proxy.run()
-                print("Simulation running.")
+                print("Simulation stopped.")
         else:
             ps, err = parse_duration(arg)
             if err:
