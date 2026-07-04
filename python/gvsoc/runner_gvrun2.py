@@ -407,7 +407,17 @@ class Runner():
             live_sig = compute_signature(self.target)
         except Exception:
             return False
-        return installed_sig == live_sig
+        if installed_sig != live_sig:
+            # The fallback is functional only for models still reading their
+            # parameters from the JSON config; components relying on a
+            # compiled config struct get uninitialized values. Make the
+            # fallback loud so a stale install is not debugged the hard way.
+            print(f'Warning: installed platform tree {tree_lib_path} does not '
+                  f'match the live system tree, falling back to the JSON '
+                  f'config path (rebuild the target to regenerate the tree).',
+                  file=sys.stderr)
+            return False
+        return True
 
     def _generate_platform_tree(self, target, builddir, component_file):
         """Generate config headers and compiled component tree .cpp."""

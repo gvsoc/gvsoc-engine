@@ -1047,7 +1047,12 @@ else:
                     continue
 
                 bridge_name = f'{binding[0].name}_{binding[1]}_bridge'
-                bridge = master_sig.bridge_to(slave_sig, parent=self, name=bridge_name)
+                try:
+                    bridge = master_sig.bridge_to(slave_sig, parent=self, name=bridge_name)
+                except RuntimeError as e:
+                    raise RuntimeError(
+                        f'{e} (binding: {binding[0].get_path()}:{binding[1]} -> '
+                        f'{binding[2].get_path()}:{binding[3]})') from e
                 if bridge is None:
                     expanded.append(binding)
                     continue
