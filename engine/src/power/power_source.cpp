@@ -196,6 +196,55 @@ int vp::PowerSource::init(Block *top, std::string name, js::Config *source_confi
 }
 
 
+int vp::PowerSource::init(Block *top, std::string name, const PowerSourceTable &table, vp::PowerTrace *trace)
+{
+    this->top = top;
+    this->trace = trace;
+
+    this->quantum = -1;
+    this->background_power = -1;
+    this->leakage = -1;
+
+    if (table.dynamic_count == 0 && table.leakage_count == 0)
+    {
+        // Empty table, leave the source inert, like the JSON init with a NULL config
+        return -1;
+    }
+
+    if (table.dynamic_count > 0)
+    {
+        std::string unit = table.dynamic_unit ? table.dynamic_unit : "";
+
+        if (unit == "pJ")
+        {
+            // Setting it to 0 will make sure it is defined and the engine will properly maintain it
+            this->quantum = 0;
+        }
+        else if (unit == "W")
+        {
+            // Setting it to 0 will make sure it is defined and the engine will properly maintain it
+            this->background_power = 0;
+        }
+        else
+        {
+            snprintf(vp_error, VP_ERROR_SIZE, "Unknown unit (name: %s, unit: %s)", name.c_str(), unit.c_str());
+            return -1;
+        }
+
+        this->dyn_table = new PowerLinearTable(table.dynamic, table.dynamic_count);
+    }
+
+    if (table.leakage_count > 0)
+    {
+        // Setting it to 0 will make sure it is defined and the engine will properly maintain it
+        this->leakage = 0;
+        this->leakage_table = new PowerLinearTable(table.leakage, table.leakage_count);
+    }
+
+    return 0;
+}
+
+
 void vp::PowerSource::check()
 {
     bool leakage_power_is_on = this->is_on && this->is_leakage_power_started;

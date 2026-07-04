@@ -369,11 +369,37 @@ class Runner():
         to distinct headers.
         """
         from dataclasses import is_dataclass
+        try:
+            from gvrun.config_gen import get_config_fields
+        except ImportError:
+            get_config_fields = None
+
         classes = {}
+
+        def _add(cls):
+            if cls is None:
+                return
+            key = (cls.__module__, cls.__qualname__)
+            if key in classes:
+                return
+            classes[key] = cls
+            # Also pull in dataclass base classes (except the config_tree
+            # roots) so shared C++ code can address the common prefix of a
+            # subclassed config through the base struct.
+            for base in cls.__bases__:
+                if is_dataclass(base) and not base.__module__.startswith('config_tree'):
+                    _add(base)
+            if get_config_fields is None:
+                return
+            # Recursively pull in element classes of list-of-Config fields
+            # so their headers get generated alongside the parent's.
+            for fld in get_config_fields(cls):
+                if fld['cpp_type'] == 'list':
+                    _add(fld['list_elem_cls'])
+
         config = getattr(component, '_component_config', None)
         if config is not None and is_dataclass(config):
-            cls = type(config)
-            classes[(cls.__module__, cls.__qualname__)] = cls
+            _add(type(config))
         for child in getattr(component, 'components', {}).values():
             classes.update(self._collect_config_classes(child))
         return classes

@@ -356,6 +356,12 @@ if os.environ.get('USE_GVRUN') is None:
                 if key in classes:
                     return
                 classes[key] = cls
+                # Also pull in dataclass base classes (except the config_tree
+                # roots) so shared C++ code can address the common prefix of a
+                # subclassed config through the base struct.
+                for base in cls.__bases__:
+                    if is_dataclass(base) and not base.__module__.startswith('config_tree'):
+                        _add(base)
                 if get_config_fields is None:
                     return
                 # Recursively pull in element classes of list-of-Config fields

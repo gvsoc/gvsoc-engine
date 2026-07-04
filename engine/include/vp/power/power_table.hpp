@@ -30,6 +30,42 @@ namespace vp
     class PowerLinearFreqTable;
 
     /**
+     * @brief One point of a linear power table
+     *
+     * Gives the power characteristic value at one (temperature, voltage, frequency)
+     * operating point. This is the struct-based equivalent of one leaf of the JSON
+     * "values" tree.
+     */
+    struct PowerTableEntry
+    {
+        double temp;   // Temperature in celsius
+        double volt;   // Voltage in V
+        double freq;   // Frequency in Hz. A negative value means "any", i.e. the value
+                       // does not depend on frequency.
+        double value;  // Power characteristic value, in pJ for energy quanta or in W
+                       // for background and leakage power.
+    };
+
+    /**
+     * @brief Struct-based description of a power source
+     *
+     * Equivalent of the JSON power source configuration, for models which get their
+     * power tables through their compiled config struct instead of the JSON config.
+     * The pointed entries are copied when the power source is initialized, so they
+     * can point to temporaries.
+     */
+    struct PowerSourceTable
+    {
+        const char *dynamic_unit = "";           // "pJ" for a per-event energy quantum,
+                                                 // "W" for background power, "" when the
+                                                 // source has no dynamic part.
+        const PowerTableEntry *dynamic = NULL;   // Dynamic table points
+        size_t dynamic_count = 0;
+        const PowerTableEntry *leakage = NULL;   // Leakage table points, always in W
+        size_t leakage_count = 0;
+    };
+
+    /**
      * @brief Power values of a power characteristic
      * 
      * This manages the actual power value of a power characteristic, depending on current
@@ -45,6 +81,17 @@ namespace vp
          * @param config JSON config giving all the power numbers at various frequencies, temperatures an voltages
          */
         PowerLinearTable(js::Config *config);
+
+        /**
+         * @brief Construct a new PowerLinearTable object from a flat entry list
+         *
+         * The entries are grouped by temperature, then voltage, to build the same
+         * table hierarchy as the JSON constructor. Entries are copied.
+         *
+         * @param entries Flat list of table points
+         * @param count   Number of points
+         */
+        PowerLinearTable(const PowerTableEntry *entries, size_t count);
 
         /**
          * @brief Get the power value at specified temperature, voltage and frequency
@@ -76,6 +123,15 @@ namespace vp
          * @param config JSON config containing the power numbers
          */
         PowerLinearTempTable(double temp, js::Config *config);
+
+        /**
+         * @brief Construct a new PowerLinearTempTable object from a flat entry list
+         *
+         * @param temp    Temperature for which this table is valid
+         * @param entries Table points, all at the given temperature
+         * @param count   Number of points
+         */
+        PowerLinearTempTable(double temp, const PowerTableEntry *entries, size_t count);
 
         /**
          * @brief Get the power value at specified voltage and frequency
@@ -117,6 +173,17 @@ namespace vp
         PowerLinearVoltTable(double volt, js::Config *config);
 
         /**
+         * @brief Construct a new PowerLinearVoltTable object from a flat entry list
+         *
+         * A negative frequency in an entry makes the value frequency-independent.
+         *
+         * @param volt    Voltage for which this table is valid
+         * @param entries Table points, all at the given voltage
+         * @param count   Number of points
+         */
+        PowerLinearVoltTable(double volt, const PowerTableEntry *entries, size_t count);
+
+        /**
          * @brief Get the power number at the specified frequency
          * 
          * The value is interpolated from the tables extracted from JSON tables.
@@ -145,6 +212,8 @@ namespace vp
     {
     public:
         PowerLinearFreqTable(double freq, js::Config *config);
+
+        PowerLinearFreqTable(double freq, double value) : freq(freq), value(value) {}
 
         inline double get_freq() { return this->freq; }
         inline double get() { return this->value; }

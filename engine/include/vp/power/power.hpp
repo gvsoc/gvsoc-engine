@@ -65,6 +65,7 @@ namespace vp
     class PowerSource;
     class PowerTrace;
     class BlockPower;
+    struct PowerSourceTable;
 
     enum PowerSupplyState
     {
@@ -154,6 +155,19 @@ namespace vp
          * @param trace Power trace where this source should account power consumed.
          */
         int init(Block *top, std::string name, js::Config *config, PowerTrace *trace);
+
+        /**
+         * @brief Initialize a power source from a struct-based table
+         *
+         * Variant of the JSON-based init for models which get their power tables
+         * through their compiled config struct. The table content is copied.
+         *
+         * @param top Component containing the power source.
+         * @param name Name of the power source, used in traces.
+         * @param table Struct-based description of the power source tables.
+         * @param trace Power trace where this source should account power consumed.
+         */
+        int init(Block *top, std::string name, const PowerSourceTable &table, PowerTrace *trace);
 
         /**
          * @brief Set temperature, voltage and frequency
@@ -485,6 +499,15 @@ namespace vp
          */
         void stop_capture();
 
+        /**
+         * @brief Finalize the power report at end of simulation
+         *
+         * If power modeling is enabled and the application never closed a capture
+         * window itself (e.g. no magic-trigger accesses), this dumps a report
+         * covering the whole run so that --power always produces a report.
+         */
+        void close();
+
         double get_average_power(double &dynamic_power, double &static_power);
 
         /**
@@ -517,6 +540,10 @@ namespace vp
         FILE *file = NULL; // File where the power reports are dumped
 
         bool enabled; // True if power modeling is enabled
+
+        bool report_dumped = false; // True once a report was dumped through stop_capture.
+                                    // Used at end of simulation to dump a whole-run report
+                                    // when the application didn't capture any window itself.
     };
 
     vp::PowerEngine *get_power_engine();

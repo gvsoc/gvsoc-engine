@@ -308,6 +308,10 @@ void gv::Controller::close(ControllerClient *client)
         top->get_stats_engine()->dump("stats.txt");
     }
 
+    // Same for the power report: dump a whole-run report unless the
+    // application already captured its own windows (magic triggers).
+    top->get_power_engine()->close();
+
     this->instance->unbuild_all();
 
     delete top;

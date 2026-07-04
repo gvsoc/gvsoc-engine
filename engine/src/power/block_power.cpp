@@ -75,6 +75,23 @@ int vp::BlockPower::new_power_source(std::string name, PowerSource *source, js::
     return 0;
 }
 
+int vp::BlockPower::new_power_source(std::string name, PowerSource *source, const PowerSourceTable &table, vp::PowerTrace *trace)
+{
+    if (trace == NULL)
+    {
+        trace = this->get_power_trace();
+    }
+
+    if (source->init(&top, name, table, trace))
+        return -1;
+
+    source->setup(VP_POWER_DEFAULT_TEMP, VP_POWER_DEFAULT_VOLT, VP_POWER_DEFAULT_FREQ);
+
+    this->sources.push_back(source);
+
+    return 0;
+}
+
 void vp::BlockPower::set_frequency(int64_t frequency)
 {
     for (PowerSource *power_source : this->sources)

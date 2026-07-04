@@ -90,6 +90,21 @@ namespace vp
         int new_power_source(std::string name, PowerSource *source, js::Config *config, PowerTrace *trace=NULL);
 
         /**
+         * @brief Declare a new power source from a struct-based table
+         *
+         * Variant of the JSON-based declaration for models which get their power
+         * tables through their compiled config struct. The table content is copied,
+         * so it can point to temporaries.
+         *
+         * @param name   Name of the power source.
+         * @param source Power source to be declared.
+         * @param table  Struct-based description of the power source tables.
+         * @param trace  Power trace where the power consumption of this source should be reported.
+         * @return int   0 if it was successfully declared, -1 otherwise.
+         */
+        int new_power_source(std::string name, PowerSource *source, const PowerSourceTable &table, PowerTrace *trace=NULL);
+
+        /**
          * @brief Declare a new power trace
          *
          * Power traces are used to account and report power consumption.

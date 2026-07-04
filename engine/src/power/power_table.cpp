@@ -47,6 +47,43 @@ vp::PowerLinearTable::PowerLinearTable(js::Config *config)
 
 
 
+vp::PowerLinearTable::PowerLinearTable(const PowerTableEntry *entries, size_t count)
+{
+    // Group the flat entry list by temperature and build one sub-table per
+    // temperature, like the JSON constructor does with the per-temperature childs
+    for (size_t i = 0; i < count; i++)
+    {
+        bool found = false;
+        for (auto table: this->temp_tables)
+        {
+            if (table->get_temp() == entries[i].temp)
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            std::vector<PowerTableEntry> subset;
+            for (size_t j = 0; j < count; j++)
+            {
+                if (entries[j].temp == entries[i].temp)
+                {
+                    subset.push_back(entries[j]);
+                }
+            }
+            temp_tables.push_back(new PowerLinearTempTable(entries[i].temp,
+                subset.data(), subset.size()));
+        }
+    }
+
+    std::sort(this->temp_tables.begin(), this->temp_tables.end(),
+    [](vp::PowerLinearTempTable *a, vp::PowerLinearTempTable *b){ return a->get_temp() <= b->get_temp(); });
+}
+
+
+
 double vp::PowerLinearTable::get(double temp, double volt, double frequency)
 {
     int low_temp_index = -1, high_temp_index = -1;
@@ -116,6 +153,44 @@ vp::PowerLinearTempTable::PowerLinearTempTable(double temp, js::Config *config)
     for (auto &x : config->get_childs())
     {
         volt_tables.push_back(new PowerLinearVoltTable(my_stod(x.first), x.second));
+    }
+
+    std::sort(this->volt_tables.begin(), this->volt_tables.end(),
+    [](vp::PowerLinearVoltTable *a, vp::PowerLinearVoltTable *b){ return a->get_volt() <= b->get_volt(); });
+}
+
+
+
+vp::PowerLinearTempTable::PowerLinearTempTable(double temp, const PowerTableEntry *entries, size_t count)
+{
+    this->temp = temp;
+
+    // Group the entries by voltage and build one sub-table per voltage
+    for (size_t i = 0; i < count; i++)
+    {
+        bool found = false;
+        for (auto table: this->volt_tables)
+        {
+            if (table->get_volt() == entries[i].volt)
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            std::vector<PowerTableEntry> subset;
+            for (size_t j = 0; j < count; j++)
+            {
+                if (entries[j].volt == entries[i].volt)
+                {
+                    subset.push_back(entries[j]);
+                }
+            }
+            volt_tables.push_back(new PowerLinearVoltTable(entries[i].volt,
+                subset.data(), subset.size()));
+        }
     }
 
     std::sort(this->volt_tables.begin(), this->volt_tables.end(),
@@ -199,6 +274,29 @@ vp::PowerLinearVoltTable::PowerLinearVoltTable(double volt, js::Config *config)
         else
         {
             this->freq_tables.push_back(new PowerLinearFreqTable(my_stod(x.first), x.second));
+        }
+    }
+
+    std::sort(this->freq_tables.begin(), this->freq_tables.end(),
+        [](vp::PowerLinearFreqTable *a, vp::PowerLinearFreqTable *b){ return a->get_freq() <= b->get_freq(); });
+}
+
+
+
+vp::PowerLinearVoltTable::PowerLinearVoltTable(double volt, const PowerTableEntry *entries, size_t count)
+{
+    this->volt = volt;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        if (entries[i].freq < 0)
+        {
+            // Negative frequency means the value does not depend on frequency
+            this->any = new PowerLinearFreqTable(0, entries[i].value);
+        }
+        else
+        {
+            this->freq_tables.push_back(new PowerLinearFreqTable(entries[i].freq, entries[i].value));
         }
     }
 

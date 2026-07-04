@@ -54,6 +54,21 @@ void vp::PowerEngine::stop_capture()
         fprintf(file, "\n");
         this->top->power.dump_traces_recursive(file);
         fprintf(file, "\n\n\n");
+
+        this->report_dumped = true;
+    }
+}
+
+
+
+void vp::PowerEngine::close()
+{
+    // Traces account from time 0, so when the application didn't delimit any
+    // capture window itself, dumping now produces a report over the whole run.
+    // When it did, its windows are kept as the only reports.
+    if (this->enabled && !this->report_dumped)
+    {
+        this->stop_capture();
     }
 }
 
