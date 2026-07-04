@@ -38,8 +38,10 @@ namespace gv {
      * v5 == GvsocConf gains proxy_enabled (layout change).
      * v6 == Gvsoc gains the Stdout base for the console-output channel (vtable layout change).
      * v7 == Gvsoc gains get_memcheck_fault() (appended vtable slot).
+     * v8 == Vcd_user gains event_update_varlen() (appended vtable slot) and the
+     *       Vcd_event_type_varlen event type (appended enumerator).
      */
-    #define GV_API_VERSION 7
+    #define GV_API_VERSION 8
 
     /**
      * Return the GV_API_VERSION the engine was built with.
@@ -258,7 +260,11 @@ namespace gv {
         // Strings
         Vcd_event_type_string,
         // Flame chart
-        Vcd_event_type_flame_chart
+        Vcd_event_type_flame_chart,
+        // Variable-length data. Each event carries an arbitrary byte payload which is
+        // stored length-prefixed by the consumer, so mostly-unique payloads (e.g. system
+        // trace lines) are stored by value instead of being interned like strings.
+        Vcd_event_type_varlen
     };
 
 
@@ -383,6 +389,26 @@ namespace gv {
          * has ended.
          */
         virtual void unlock() {}
+
+        /**
+         * Called by GVSOC to push a new value of a variable-length VCD event.
+         *
+         * Unlike string events, the payload is always copied by the callee, so the caller
+         * keeps ownership of the buffer and may reuse it right after the call.
+         * No GVSOC API can be called from this callback.
+         *
+         * NOTE: declared last on purpose so the vtable slots of the existing entries are
+         * unchanged; only this new slot is added. GV_API_VERSION is bumped accordingly.
+         *
+         * @param timestamp Timestamp of the new value in picoseconds.
+         * @param cycles Cycle count of the new value.
+         * @param id ID of the VCD event.
+         * @param data The payload bytes (not null-terminated).
+         * @param size Number of bytes in data.
+         * @param flags Event flags, free for the producer (e.g. a trace level).
+         */
+        virtual bool event_update_varlen(int64_t timestamp, int64_t cycles, void *id,
+            const uint8_t *data, int size, int flags) { return false; }
     };
 
 
