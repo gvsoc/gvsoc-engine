@@ -125,7 +125,7 @@ public:
      * @param size Size of the window in bytes.
      * @return Host pointer to the first byte of the window, or NULL.
      */
-    virtual uint8_t *debug_mem_hostptr(uint64_t addr, uint64_t size) { return NULL; }
+    virtual uint8_t *debug_mem_hostptr(uint64_t addr, uint64_t size) { return nullptr; }
 
     // Recursion limit for debug_mem_regions, to break routing-graph cycles
     static constexpr int MAX_DEPTH = 32;
