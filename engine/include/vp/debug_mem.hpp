@@ -108,6 +108,25 @@ public:
     virtual void debug_mem_regions(std::vector<DebugMemRegion> &regions,
         uint64_t local_base, uint64_t window_size, uint64_t entry_base, int depth);
 
+    /**
+     * @brief Raw host pointer to this component's backing storage
+     *
+     * Terminal components whose storage is a plain host array can
+     * return a pointer to the window [addr, addr + size) so trusted
+     * fast paths (e.g. the DBT core's translated loads/stores) access
+     * it directly, bypassing both the io protocol and
+     * debug_mem_access. The default returns NULL: no direct access.
+     *
+     * Implementations must only return non-NULL when a direct access
+     * is indistinguishable from an io access apart from timing (no
+     * side effect, no integrity checking, no access notification).
+     *
+     * @param addr Local address of the window.
+     * @param size Size of the window in bytes.
+     * @return Host pointer to the first byte of the window, or NULL.
+     */
+    virtual uint8_t *debug_mem_hostptr(uint64_t addr, uint64_t size) { return NULL; }
+
     // Recursion limit for debug_mem_regions, to break routing-graph cycles
     static constexpr int MAX_DEPTH = 32;
 };
