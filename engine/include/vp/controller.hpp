@@ -182,6 +182,11 @@ namespace gv {
             gv::Vcd::MatchKind kind, ControllerClient *client);
         int event_unsubscribe(std::string pattern,
             gv::Vcd::MatchKind kind, ControllerClient *client);
+        int trace_subscribe(std::string pattern,
+            gv::Vcd::MatchKind kind, ControllerClient *client);
+        int trace_unsubscribe(std::string pattern,
+            gv::Vcd::MatchKind kind, ControllerClient *client);
+        void trace_level_set(std::string level, ControllerClient *client);
         void *get_component(std::string path, ControllerClient *client);
 
         vp::Top *top_get() { return this->handler; }
@@ -337,6 +342,11 @@ namespace gv {
             gv::Vcd::MatchKind kind = gv::Vcd::MatchKind::Exact) override;
         int event_unsubscribe(std::string pattern,
             gv::Vcd::MatchKind kind = gv::Vcd::MatchKind::Exact) override;
+        int trace_subscribe(std::string pattern,
+            gv::Vcd::MatchKind kind = gv::Vcd::MatchKind::Regex) override;
+        int trace_unsubscribe(std::string pattern,
+            gv::Vcd::MatchKind kind = gv::Vcd::MatchKind::Regex) override;
+        void trace_level_set(std::string level) override;
         void *get_component(std::string path) override;
         void wait_runnable() override;
         void terminate() override;

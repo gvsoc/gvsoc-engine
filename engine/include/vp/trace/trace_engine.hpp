@@ -37,6 +37,11 @@ namespace vp {
     #define TRACE_EVENT_BUFFER_SIZE (1024*1024)
     #define TRACE_EVENT_NB_BUFFER   256
 
+    // Maximum payload of one streamed text-trace line (see vp::Trace::stream_msg).
+    // Longer lines are truncated. Kept well below both the event buffer size and the
+    // GUI database's per-page varlen payload limit.
+    #define TRACE_STREAM_MAX_PAYLOAD 4096
+
     #define TRACE_FORMAT_LONG  0
     #define TRACE_FORMAT_SHORT 1
 
@@ -77,10 +82,20 @@ namespace vp {
         static void dump_event_64(vp::TraceEngine *__this, vp::Trace *trace, int64_t timestamp, int64_t cycles, uint8_t *event, uint8_t *flags);
         static void dump_event_real(vp::TraceEngine *__this, vp::Trace *trace, int64_t timestamp, int64_t cycles, uint8_t *event, uint8_t *flags);
         static void dump_event_string(vp::TraceEngine *__this, vp::Trace *trace, int64_t timestamp, int64_t cycles, uint8_t *event, uint8_t *flags);
+        // Push one formatted text-trace line into the event buffers as a varlen
+        // record. The payload bytes are copied inline into the buffer (they are
+        // mostly unique, interning would not help). Engine thread only.
+        void dump_event_varlen(vp::Trace *trace, int64_t timestamp, int64_t cycles,
+            const uint8_t *data, uint32_t size, uint32_t flags);
         // Mark a legacy vp::Trace enabled/disabled directly on the Vcd_user (see vp::Event::
         // enable_set); on enable it allocates and returns the streaming handle (trace->user_trace).
         // No-op when not streaming to a Vcd_user.
         void *event_enable_now(vp::Trace *trace, bool enabled);
+        // Enable/disable the streaming of a text trace's formatted lines to the
+        // Vcd_user as varlen events. Like event_enable_now but forces the varlen
+        // type (a text trace's own type is not varlen) and flips the trace's
+        // stream_active gate. Returns the Vcd_user handle on enable.
+        void *trace_stream_enable_now(vp::Trace *trace, bool enabled);
         // Serialize a register trace's bit-field layout as a JSON description
         // ({"fields":[{"n":"NAME","b":bit,"w":width},...]}) for the GUI, or ""
         // when the trace carries no fields. Read lazily, after the generated
@@ -95,6 +110,7 @@ namespace vp {
         static uint8_t *parse_event_64(uint8_t *buffer, bool &unlock);
         static uint8_t *parse_event_real(uint8_t *buffer, bool &unlock);
         static uint8_t *parse_event_string(uint8_t *buffer, bool &unlock);
+        static uint8_t *parse_event_varlen(uint8_t *buffer, bool &unlock);
 
         bool event_active_get(std::string path, std::string &file_path);
 
@@ -128,6 +144,17 @@ namespace vp {
         // Symmetric teardown — drop the refcount; the 1->0 edge deactivates.
         // Returns the count of matched entries.
         int event_unsubscribe(std::string pattern, gv::Vcd::MatchKind kind);
+
+        // Match all text traces whose path satisfies `pattern` under `kind` and
+        // bump the per-trace subscriber refcount. On the 0->1 edge the trace's
+        // formatted lines start streaming to the Vcd_user as varlen events
+        // (see trace_stream_enable_now). Recording only — independent from the
+        // --trace console/file output. Returns the count of matched traces.
+        int trace_subscribe(std::string pattern, gv::Vcd::MatchKind kind);
+
+        // Symmetric teardown — the 1->0 edge genuinely stops the streaming.
+        // Returns the count of matched traces.
+        int trace_unsubscribe(std::string pattern, gv::Vcd::MatchKind kind);
         void reg_trace(vp::Trace *trace, int event, string path, string name);
 
         void start();

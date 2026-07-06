@@ -905,6 +905,23 @@ int gv::Controller::event_unsubscribe(std::string pattern,
     return this->instance->traces.get_trace_engine()->event_unsubscribe(pattern, kind);
 }
 
+int gv::Controller::trace_subscribe(std::string pattern,
+    gv::Vcd::MatchKind kind, ControllerClient *client)
+{
+    return this->instance->traces.get_trace_engine()->trace_subscribe(pattern, kind);
+}
+
+int gv::Controller::trace_unsubscribe(std::string pattern,
+    gv::Vcd::MatchKind kind, ControllerClient *client)
+{
+    return this->instance->traces.get_trace_engine()->trace_unsubscribe(pattern, kind);
+}
+
+void gv::Controller::trace_level_set(std::string level, ControllerClient *client)
+{
+    this->instance->traces.get_trace_engine()->set_trace_level(level.c_str());
+}
+
 
 static std::vector<std::string> split(const std::string& s, char delimiter)
 {

@@ -371,6 +371,31 @@ int gv::ControllerClient::event_unsubscribe(std::string pattern,
     return gv::Controller::get().event_unsubscribe(pattern, kind, this);
 }
 
+int gv::ControllerClient::trace_subscribe(std::string pattern,
+    gv::Vcd::MatchKind kind)
+{
+    this->logger.info("Trace subscribe (pattern: %s, kind: %d)\n",
+        pattern.c_str(), (int)kind);
+    // Same locking model as event_subscribe: pointer-sized writes and the
+    // handle-before-gate store order in trace_stream_enable_now keep the race
+    // windows narrow.
+    return gv::Controller::get().trace_subscribe(pattern, kind, this);
+}
+
+int gv::ControllerClient::trace_unsubscribe(std::string pattern,
+    gv::Vcd::MatchKind kind)
+{
+    this->logger.info("Trace unsubscribe (pattern: %s, kind: %d)\n",
+        pattern.c_str(), (int)kind);
+    return gv::Controller::get().trace_unsubscribe(pattern, kind, this);
+}
+
+void gv::ControllerClient::trace_level_set(std::string level)
+{
+    this->logger.info("Trace level set (level: %s)\n", level.c_str());
+    gv::Controller::get().trace_level_set(level, this);
+}
+
 void *gv::ControllerClient::get_component(std::string path)
 {
     return gv::Controller::get().get_component(path, this);

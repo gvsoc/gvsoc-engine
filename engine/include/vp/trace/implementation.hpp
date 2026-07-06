@@ -198,8 +198,19 @@ namespace vp {
 
   inline void vp::Trace::warning(const char *fmt, ...) {
   #ifdef VP_TRACE_ACTIVE
-  	if (is_active && comp->traces.get_trace_engine()->get_trace_level() >= this->level)
+  	if ((is_active || stream_active) && comp->traces.get_trace_engine()->get_trace_level() >= this->level)
     {
+      if (stream_active)
+      {
+        va_list ap;
+        va_start(ap, fmt);
+        this->stream_msg(vp::Trace::LEVEL_WARNING, fmt, ap);
+        va_end(ap);
+      }
+      if (!is_active)
+      {
+        return;
+      }
       dump_warning_header();
       va_list ap;
       va_start(ap, fmt);
@@ -217,10 +228,21 @@ namespace vp {
 
   inline void vp::Trace::warning(vp::Trace::warning_type_e type, const char *fmt, ...) {
   #ifdef VP_TRACE_ACTIVE
-  	if (is_active && comp->traces.get_trace_engine()->get_trace_level() >= vp::Trace::LEVEL_WARNING)
+  	if ((is_active || stream_active) && comp->traces.get_trace_engine()->get_trace_level() >= vp::Trace::LEVEL_WARNING)
     {
       if (comp->traces.get_trace_engine()->is_warning_active(type))
       {
+        if (stream_active)
+        {
+          va_list ap;
+          va_start(ap, fmt);
+          this->stream_msg(vp::Trace::LEVEL_WARNING, fmt, ap);
+          va_end(ap);
+        }
+        if (!is_active)
+        {
+          return;
+        }
         dump_warning_header();
         va_list ap;
         va_start(ap, fmt);
@@ -239,13 +261,23 @@ namespace vp {
   inline void vp::Trace::msg(const char *fmt, ...)
   {
   #ifdef VP_TRACE_ACTIVE
-  	if (is_active && comp->traces.get_trace_engine()->get_trace_level() >= this->level)
+  	if ((is_active || stream_active) && comp->traces.get_trace_engine()->get_trace_level() >= this->level)
     {
-      dump_header();
-      va_list ap;
-      va_start(ap, fmt);
-      if (vfprintf(this->trace_file, fmt, ap) < 0) {}
-      va_end(ap);
+      if (stream_active)
+      {
+        va_list ap;
+        va_start(ap, fmt);
+        this->stream_msg(this->level, fmt, ap);
+        va_end(ap);
+      }
+      if (is_active)
+      {
+        dump_header();
+        va_list ap;
+        va_start(ap, fmt);
+        if (vfprintf(this->trace_file, fmt, ap) < 0) {}
+        va_end(ap);
+      }
     }
   #endif
   }
@@ -253,8 +285,19 @@ namespace vp {
   inline void vp::Trace::msg(int level, const char *fmt, ...)
   {
   #ifdef VP_TRACE_ACTIVE
-    if (is_active && comp->traces.get_trace_engine()->get_trace_level() >= level)
+    if ((is_active || stream_active) && comp->traces.get_trace_engine()->get_trace_level() >= level)
     {
+      if (stream_active)
+      {
+        va_list ap;
+        va_start(ap, fmt);
+        this->stream_msg(level, fmt, ap);
+        va_end(ap);
+      }
+      if (!is_active)
+      {
+        return;
+      }
       dump_header();
       if (level == vp::Trace::LEVEL_ERROR)
       {

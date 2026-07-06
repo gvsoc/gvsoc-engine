@@ -410,6 +410,115 @@ int vp::TraceEngine::event_unsubscribe(std::string pattern, gv::Vcd::MatchKind k
     return count;
 }
 
+int vp::TraceEngine::trace_subscribe(std::string pattern, gv::Vcd::MatchKind kind)
+{
+    // Bump the subscriber refcount of one text trace and, on the 0->1 edge,
+    // start streaming its formatted lines to the Vcd_user as varlen events.
+    auto subscribe_trace = [&](vp::Trace *trace)
+    {
+        if (trace->subscriber_count++ == 0)
+        {
+            this->trace_stream_enable_now(trace, true);
+        }
+    };
+
+    // Fast path: an exact path is resolved with a single hash lookup.
+    // traces_map mixes text traces and legacy event traces, so filter on
+    // is_event.
+    if (kind == gv::Vcd::MatchKind::Exact)
+    {
+        auto it = this->traces_map.find(pattern);
+        if (it != this->traces_map.end() && it->second && !it->second->is_event)
+        {
+            subscribe_trace(it->second);
+            return 1;
+        }
+        return 0;
+    }
+
+    regex_t compiled_regex;
+    bool have_regex = false;
+    if (kind == gv::Vcd::MatchKind::Regex)
+    {
+        if (regcomp(&compiled_regex, pattern.c_str(), REG_EXTENDED | REG_NOSUB) != 0)
+        {
+            return 0;
+        }
+        have_regex = true;
+    }
+
+    int count = 0;
+    for (vp::Trace *trace : this->traces_array)
+    {
+        if (!trace) continue;
+
+        if (path_matches(trace->get_full_path(), pattern, kind,
+            have_regex ? &compiled_regex : NULL))
+        {
+            subscribe_trace(trace);
+            count++;
+        }
+    }
+
+    if (have_regex) regfree(&compiled_regex);
+    return count;
+}
+
+int vp::TraceEngine::trace_unsubscribe(std::string pattern, gv::Vcd::MatchKind kind)
+{
+    // Drop the subscriber refcount and, on the 1->0 edge, genuinely stop the
+    // streaming. A mismatched unsubscribe (count already 0) is silently
+    // ignored to keep the counter sane.
+    auto unsubscribe_trace = [&](vp::Trace *trace) -> bool
+    {
+        if (trace->subscriber_count > 0)
+        {
+            if (--trace->subscriber_count == 0)
+            {
+                this->trace_stream_enable_now(trace, false);
+            }
+            return true;
+        }
+        return false;
+    };
+
+    if (kind == gv::Vcd::MatchKind::Exact)
+    {
+        auto it = this->traces_map.find(pattern);
+        if (it != this->traces_map.end() && it->second && !it->second->is_event)
+        {
+            return unsubscribe_trace(it->second) ? 1 : 0;
+        }
+        return 0;
+    }
+
+    regex_t compiled_regex;
+    bool have_regex = false;
+    if (kind == gv::Vcd::MatchKind::Regex)
+    {
+        if (regcomp(&compiled_regex, pattern.c_str(), REG_EXTENDED | REG_NOSUB) != 0)
+        {
+            return 0;
+        }
+        have_regex = true;
+    }
+
+    int count = 0;
+    for (vp::Trace *trace : this->traces_array)
+    {
+        if (!trace) continue;
+
+        if (path_matches(trace->get_full_path(), pattern, kind,
+            have_regex ? &compiled_regex : NULL))
+        {
+            if (unsubscribe_trace(trace)) count++;
+        }
+    }
+
+    if (have_regex) regfree(&compiled_regex);
+    return count;
+}
+
 void vp::TraceEngine::check_trace_active(vp::Trace *trace, int event)
 {
     std::string full_path = trace->get_full_path();
@@ -726,6 +835,22 @@ void vp::TraceEngine::start()
                 {
                     this->event_enable_now(trace, true);
                 }
+            }
+        }
+
+        // Seed the recording of text traces activated on the command line: any
+        // --trace-matched trace starts streaming its lines to the Vcd_user as
+        // varlen events, in addition to its console/file output. The --trace
+        // filter acts as a pinned subscriber (same idiom as the --event filter
+        // above), so a later trace_unsubscribe from the GUI can still turn the
+        // recording off. Text traces are deliberately NOT event_declare'd: there
+        // are thousands of them and the consumer discovers the recorded ones
+        // lazily through event_enable.
+        for (vp::Trace *trace : this->traces_array)
+        {
+            if (trace && trace->get_active() && trace->subscriber_count++ == 0)
+            {
+                this->trace_stream_enable_now(trace, true);
             }
         }
     }

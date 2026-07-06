@@ -40,8 +40,12 @@ namespace gv {
      * v7 == Gvsoc gains get_memcheck_fault() (appended vtable slot).
      * v8 == Vcd_user gains event_update_varlen() (appended vtable slot) and the
      *       Vcd_event_type_varlen event type (appended enumerator).
+     * v9 == Vcd gains trace_subscribe()/trace_unsubscribe() (appended vtable slots):
+     *       text-trace recording control, streamed as varlen events.
+     * v10 == Vcd gains trace_level_set() (appended vtable slot): runtime global
+     *       trace-level control (the --trace-level option).
      */
-    #define GV_API_VERSION 8
+    #define GV_API_VERSION 10
 
     /**
      * Return the GV_API_VERSION the engine was built with.
@@ -500,6 +504,50 @@ namespace gv {
          */
         virtual int event_unsubscribe(std::string pattern,
             MatchKind kind = MatchKind::Exact) { return 0; }
+
+        /**
+         * Subscribe to a set of system (text) traces for recording.
+         *
+         * Matches the platform's text traces (the ones --trace prints) against
+         * `pattern` and bumps their per-trace subscriber count. On the 0->1
+         * edge the trace's formatted lines start streaming to the bound
+         * Vcd_user as varlen events (event_update_varlen), with the trace
+         * level in the flags. This controls recording only: it is independent
+         * from the --trace console/file output, which keeps working unchanged.
+         * Lines respect the global trace level like console output.
+         *
+         * NOTE: declared last on purpose so the vtable slots of the existing
+         * entries are unchanged; only these new slots are added.
+         * GV_API_VERSION is bumped accordingly.
+         *
+         * @param pattern The path / prefix / regex to match.
+         * @param kind  Match policy. Default Regex, like --trace.
+         * @return Number of traces newly subscribed.
+         */
+        virtual int trace_subscribe(std::string pattern,
+            MatchKind kind = MatchKind::Regex) { return 0; }
+
+        /**
+         * Symmetric teardown — drop the recording refcount of the matching
+         * text traces; the 1->0 edge genuinely stops their streaming (unlike
+         * the proxy "trace remove" command, which only stacks an exclude
+         * regex). Returns the number of subscriptions removed.
+         */
+        virtual int trace_unsubscribe(std::string pattern,
+            MatchKind kind = MatchKind::Regex) { return 0; }
+
+        /**
+         * Set the global trace level, like the --trace-level command-line option.
+         *
+         * Both console (--trace) and recording (trace_subscribe) output is gated by
+         * this level: a trace only fires when its own level is at or below the
+         * global one. Accepts "error", "warning", "info", "debug" or "trace"
+         * (increasing verbosity); an unknown value is ignored.
+         *
+         * NOTE: declared last on purpose so the vtable slots of the existing entries
+         * are unchanged; only this new slot is added. GV_API_VERSION is bumped.
+         */
+        virtual void trace_level_set(std::string level) {}
     };
 
 

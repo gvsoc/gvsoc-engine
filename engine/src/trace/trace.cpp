@@ -107,7 +107,10 @@ void vp::BlockTrace::new_trace_event_string(std::string name, Trace *trace)
 #ifdef VP_TRACE_ACTIVE
 bool vp::Trace::get_active(int level)
 {
-    return is_active && this->comp->traces.get_trace_engine()->get_trace_level() >= level;
+    // See the get_active() note in trace.hpp: recording (stream_active) also
+    // activates the trace, gated by the global trace level like console output.
+    return (is_active || stream_active)
+        && this->comp->traces.get_trace_engine()->get_trace_level() >= level;
 }
 #endif
 
@@ -139,6 +142,13 @@ void vp::Trace::dump_header()
 
 void vp::Trace::force_warning(const char *fmt, ...)
 {
+    if (this->stream_active)
+    {
+        va_list ap;
+        va_start(ap, fmt);
+        this->stream_msg(vp::Trace::LEVEL_WARNING, fmt, ap);
+        va_end(ap);
+    }
     dump_warning_header();
     va_list ap;
     va_start(ap, fmt);
@@ -156,6 +166,13 @@ void vp::Trace::force_warning(vp::Trace::warning_type_e type, const char *fmt, .
 {
     if (comp->traces.get_trace_engine()->is_warning_active(type))
     {
+        if (this->stream_active)
+        {
+            va_list ap;
+            va_start(ap, fmt);
+            this->stream_msg(vp::Trace::LEVEL_WARNING, fmt, ap);
+            va_end(ap);
+        }
         dump_warning_header();
         va_list ap;
         va_start(ap, fmt);
@@ -171,6 +188,13 @@ void vp::Trace::force_warning(vp::Trace::warning_type_e type, const char *fmt, .
 
 void vp::Trace::force_warning_no_error(const char *fmt, ...)
 {
+    if (this->stream_active)
+    {
+        va_list ap;
+        va_start(ap, fmt);
+        this->stream_msg(vp::Trace::LEVEL_WARNING, fmt, ap);
+        va_end(ap);
+    }
     dump_warning_header();
     va_list ap;
     va_start(ap, fmt);
@@ -183,6 +207,13 @@ void vp::Trace::force_warning_no_error(vp::Trace::warning_type_e type, const cha
 {
     if (comp->traces.get_trace_engine()->is_warning_active(type))
     {
+        if (this->stream_active)
+        {
+            va_list ap;
+            va_start(ap, fmt);
+            this->stream_msg(vp::Trace::LEVEL_WARNING, fmt, ap);
+            va_end(ap);
+        }
         dump_warning_header();
         va_list ap;
         va_start(ap, fmt);
@@ -611,6 +642,43 @@ void *vp::TraceEngine::event_enable_now(vp::Trace *trace, bool enabled)
     return handle;
 }
 
+void *vp::TraceEngine::trace_stream_enable_now(vp::Trace *trace, bool enabled)
+{
+    // Start/stop streaming a text trace's formatted lines to the Vcd_user as varlen
+    // events. Independent from is_active (console/file output). No-op without a
+    // Vcd_user; nothing to disable if streaming was never enabled.
+    if (!this->global_enable || this->vcd_user == NULL)
+        return NULL;
+
+    if (!enabled)
+    {
+        // Close the producer gate first so no new line is emitted for this trace,
+        // then notify the user so it can open a disabled period.
+        trace->stream_active = false;
+        if (trace->user_trace == NULL)
+            return NULL;
+        int64_t timestamp = trace->comp ? trace->comp->time.get_time() : 0;
+        this->vcd_user->event_enable(trace->get_full_path(), gv::Vcd_event_type_varlen,
+            0, "", "", false, timestamp);
+        return NULL;
+    }
+
+    std::string clock_trace_name = "";
+    if (trace->comp && trace->comp->clock.get_engine())
+    {
+        clock_trace_name = trace->comp->clock.get_engine()->clock_trace.get_path();
+    }
+    int64_t timestamp = trace->comp ? trace->comp->time.get_time() : 0;
+
+    void *handle = this->vcd_user->event_enable(trace->get_full_path(),
+        gv::Vcd_event_type_varlen, 0, "", clock_trace_name, true, timestamp);
+    // The handle must be visible before the producer gate opens, since the emit
+    // points read stream_active first and then user_trace.
+    trace->user_trace = handle;
+    trace->stream_active = true;
+    return handle;
+}
+
 uint8_t *vp::TraceEngine::parse_event_real(uint8_t *buffer, bool &unlock)
 {
     event_real_t *event = (event_real_t *)buffer;
@@ -781,6 +849,97 @@ uint8_t *vp::TraceEngine::parse_event_string(uint8_t *buffer, bool &unlock)
     return buffer + sizeof(event_64_t);
 }
 
+
+// A streamed text-trace line. Unlike the other event records, the payload bytes are
+// stored inline right after this header, so the record has a variable size; the parse
+// callback advances the cursor by the full record size (the ring framing is
+// self-sized: the parser trusts each callback's return value).
+typedef struct
+{
+    ParseCallback callback;
+    vp::Trace *trace;
+    int64_t timestamp;
+    int64_t cycles;
+    uint32_t size;
+    uint32_t flags;
+} __attribute__((packed)) event_varlen_t;
+
+void vp::TraceEngine::dump_event_varlen(vp::Trace *trace, int64_t timestamp, int64_t cycles,
+    const uint8_t *data, uint32_t size, uint32_t flags)
+{
+    if (!this->global_enable)
+    {
+        return;
+    }
+
+    if (size > TRACE_STREAM_MAX_PAYLOAD)
+    {
+        size = TRACE_STREAM_MAX_PAYLOAD;
+    }
+
+    uint8_t *buffer = (uint8_t *)this->get_event_buffer(sizeof(event_varlen_t) + size);
+    event_varlen_t *buff_event = (event_varlen_t *)buffer;
+
+    buff_event->callback = &vp::TraceEngine::parse_event_varlen;
+    buff_event->trace = trace;
+    buff_event->timestamp = timestamp;
+    buff_event->cycles = cycles;
+    buff_event->size = size;
+    buff_event->flags = flags;
+    memcpy(buffer + sizeof(event_varlen_t), data, size);
+}
+
+uint8_t *vp::TraceEngine::parse_event_varlen(uint8_t *buffer, bool &unlock)
+{
+    event_varlen_t *event = (event_varlen_t *)buffer;
+    vp::Trace *trace = event->trace;
+
+    // Text traces are only streamed to a Vcd_user (there is no Event_file fallback);
+    // user_trace can be NULL if a line was emitted while streaming was being disabled.
+    if (trace->user_trace)
+    {
+        unlock = trace->comp->traces.get_trace_engine()->vcd_user->event_update_varlen(
+            event->timestamp, event->cycles, trace->user_trace,
+            buffer + sizeof(event_varlen_t), event->size, event->flags);
+    }
+
+    return buffer + sizeof(event_varlen_t) + event->size;
+}
+
+void vp::Trace::stream_msg(int level, const char *fmt, va_list ap)
+{
+    int64_t time = -1;
+    int64_t cycles = -1;
+    if (comp->clock.get_engine())
+    {
+        cycles = comp->clock.get_engine()->get_cycles();
+    }
+    if (comp->time.get_engine())
+    {
+        time = comp->time.get_engine()->get_time();
+    }
+
+    // Format only the message body: time, cycles and path travel as structured
+    // fields, and the GUI renders its own columns, so no header and no ANSI escapes.
+    char buffer[TRACE_STREAM_MAX_PAYLOAD];
+    int len = vsnprintf(buffer, sizeof(buffer), fmt, ap);
+    if (len < 0)
+    {
+        return;
+    }
+    if (len >= (int)sizeof(buffer))
+    {
+        len = sizeof(buffer) - 1;
+    }
+    // Each line is one record, the trailing newline is display formatting
+    while (len > 0 && buffer[len - 1] == '\n')
+    {
+        len--;
+    }
+
+    comp->traces.get_trace_engine()->dump_event_varlen(this, time, cycles,
+        (const uint8_t *)buffer, len, level);
+}
 
 vp::Trace *vp::TraceEngine::get_trace_from_path(std::string path)
 {

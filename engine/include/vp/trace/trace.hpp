@@ -246,6 +246,12 @@ class Trace {
     void dump_warning_header();
     void dump_fatal_header();
 
+    // Format one text-trace line (without header nor ANSI escapes — time, cycles and
+    // path travel as structured fields) and push it into the event buffers as a
+    // varlen record so it reaches the Vcd_user off-thread. Called by the msg/warning
+    // emit points when stream_active is set.
+    void stream_msg(int level, const char *fmt, va_list ap);
+
     void set_active(bool active);
     void set_event_active(bool active, Event_file *file=NULL);
     vp::Trace *next_get() { return this->next; }
@@ -255,7 +261,14 @@ class Trace {
     inline bool get_active(int level) { return false; }
     inline bool get_event_active() { return false; }
 #else
-    inline bool get_active() { return is_active; }
+    // Also true when the trace is being streamed to a Vcd_user (GUI recording),
+    // not only when it is dumped to the console/file (is_active). Models gate the
+    // expensive trace formatting on get_active(), so without this a trace enabled
+    // for recording at runtime (gv::Vcd::trace_subscribe) would never be built and
+    // nothing would reach the GUI. The msg()/warning() emit points still route the
+    // formatted line to the console only when is_active, so recording stays
+    // independent from console output.
+    inline bool get_active() { return is_active || stream_active; }
     bool get_active(int level);
     inline bool get_event_active() { return this->dump_callback != NULL; }
 #endif
@@ -269,7 +282,13 @@ class Trace {
     gv::Vcd_event_type type;
     // Same role as vp::Event::subscriber_count — refcount of live
     // gv::Vcd::event_subscribe() callers matching this legacy trace's path.
+    // For text traces it counts gv::Vcd::trace_subscribe() callers instead.
     int subscriber_count = 0;
+    // True while this text trace's formatted lines are streamed to the Vcd_user as
+    // varlen events (see TraceEngine::trace_stream_enable_now). Independent from
+    // is_active, which controls the console/file output: a trace can be recorded
+    // by the GUI, dumped to a file, or both.
+    bool stream_active = false;
     // Borrowed pointer to the owning register's bit-field layout
     // (name/bit/width), or nullptr for a non-register trace. Set when the
     // register is constructed; the vector itself is filled later by the
