@@ -584,9 +584,12 @@ Read burst shape (AXI-asymmetric)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A read burst is always submitted as **exactly one** ``req()`` with
-``size = total_burst_bytes``, ``is_first = is_last = true``, and
-``burst_id = <ID or -1>``. The slave decides how to respond — see
-the three forms below.
+``size = total_burst_bytes``, ``is_first = is_last = true``,
+``burst_id = <ID or -1>`` and — on the beat protocol — **no data**
+(``data == NULL``): the read data comes back inside the response
+beats' own payloads (see `Pooled request allocation
+(IoReqAllocator)`_). The slave decides how to respond — see the
+three forms below.
 
 The three response forms
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -607,13 +610,15 @@ For any single ``req()`` the slave may pick:
    burst's final ``IO_RESP_OK`` / ``IO_RESP_INVALID``.
 
    Under the **initiator-owned request convention** (which all in-tree
-   io_v2 models and adapters follow) a multi-beat read MUST deliver each
-   beat as a **distinct** response object — not the request reused — so the
-   initiator can keep owning its request and free each beat as it is
-   consumed. Correlation back to per-request state is via ``req->initiator``,
-   copied onto every beat, not via object identity. Reusing the request
-   object for response beats (the bare-protocol shorthand) is discouraged:
-   it breaks any master that keeps using its request across the beats.
+   io_v2 models and adapters follow) a read MUST deliver each beat as a
+   **distinct** allocator-backed response object (see `Pooled request
+   allocation (IoReqAllocator)`_) — never the request reused — whose
+   co-allocated payload carries the beat's data; the read burst request
+   itself is data-less. The initiator keeps owning its request (and frees
+   it itself on the last response), copies each beat's payload out and
+   frees the beat with ``req->free()``. Correlation back to per-request
+   state is via ``req->initiator``, copied onto every beat, not via
+   object identity.
 
 All three are valid and masters must tolerate any of them.
 Diagrammatically, the three shapes look like this:
@@ -801,6 +806,56 @@ an ``IoV2BeatAdapter`` that normalises whatever response form the
 slave produced into a uniform per-beat ``resp()`` at cycle-accurate
 spacing. See `The beat adapter`_.
 
+Pooled request allocation (IoReqAllocator)
+------------------------------------------
+
+On the beat protocol, requests and response beats routinely cross a
+boundary where the **consumer frees an object the producer allocated**
+(the terminal master frees the read beats an adapter produced), so no
+component can pool privately — and a bare ``new`` / ``delete`` per beat
+dominates the model cost on beat-heavy paths. ``vp::IoReqAllocator``
+(``io_v2.hpp``) replaces it:
+
+- **One shared allocator per payload size.** ``IoReqAllocator::get(size)``
+  returns the process-wide pool for that size, creating it on first use.
+  A component fetches its allocator(s) once at construction — its beat
+  width is static. Payload size is always a **beat width** (a beat carries
+  at most one beat of data, never a whole burst); size ``0`` serves
+  data-less requests (read burst requests).
+- **Request + payload in one block.** ``alloc()`` pops the freelist or
+  lazily creates a request whose payload is co-allocated behind it;
+  ``req->data`` is set once to that payload (``NULL`` for size 0) and
+  **must never be repointed**. ``alloc()`` reinitializes no other field —
+  callers set ``addr`` / ``size`` / ``opcode`` / ``is_first`` / ``is_last``
+  / ``burst_id`` themselves, exactly as after a bare ``new``.
+- **Free through the back-pointer.** Every allocator-provided request
+  carries its home pool; any component frees it with ``req->free()``,
+  regardless of who allocated it.
+
+The rules that come with it (also stated in the header):
+
+- **Read burst requests carry no data** (``data == NULL``). The producer
+  of the response allocates each beat from its allocator; the beat's
+  co-allocated payload holds the read data (the producer points its own
+  downstream, non-beat read request at that payload so the target fills
+  it directly, without an extra copy). The **terminal master copies each
+  beat's payload into its destination buffer, then frees the beat** — and
+  frees its own (data-less) burst request on the last one
+  (initiator-owned convention; the burst request is never round-tripped
+  as a read beat).
+- **Writes are unchanged**: write beats round-trip back to the master as
+  acks, nobody else frees them, and their ``data`` may keep pointing into
+  the master's own buffer.
+- **Downstream requests to non-beat protocols** (big-packet / sync /
+  single-req) are never freed by the target; components keep reusing
+  their own request objects there and may repoint their ``data`` (e.g. at
+  a response beat's payload).
+- **Never bare ``new`` / ``delete``** for anything that crosses a
+  consumer-frees boundary — always ``IoReqAllocator`` + ``req->free()``.
+
+Big-packet paths are untouched: big-packet requests stay statically
+allocated on their master, carry data both directions, and round-trip.
+
 Latency annotation
 ------------------
 
@@ -967,18 +1022,20 @@ The beat-sync adapter
 for an ``IoV2Sync`` slave, auto-inserted in its place for that one case.
 Because a sync slave serves *any* size inline and always replies
 ``IO_REQ_DONE`` (never ``GRANTED`` / ``DENIED``), the adapter does not need
-the general adapter's per-beat sub-read pipeline at all: it **forwards the
-whole burst as a single request**, then spreads the inline response into a
-per-beat ``resp()`` stream (the same beat-spreading and ≤1-beat-per-cycle
-pacing the general adapter uses on its response side). That drops the
-sub-read FIFO, the out-of-order completion buffer, the async ``resp()``
-path and the deny/retry hold — about half the code. The externally visible
-contract is identical to the general adapter: one ``resp()`` per beat,
-``is_first`` / ``is_last`` / ``burst_id`` / ``status`` per beat, the
-last beat landing at ``now + get_full_latency()``, and the same ownership
-rules (the master hands over a **heap** burst request for a multi-beat
-read, freed on the last beat; each read beat is its own object the master
-frees). Source:
+the general adapter's async/deny machinery at all: a write burst is
+forwarded whole (one inline call), and a read burst — data-less under the
+beat protocol — is served **inline at submit time** as beat-sized sub-reads,
+each into a distinct allocator-backed beat whose co-allocated payload
+receives the data (data snapshot and timing identical to the previous
+single whole-burst call: everything is read in the submit cycle). Every
+upstream beat is therefore fully determined at submit and pushed onto one
+flat queue; an FSM streams them upstream at one ``resp()`` per cycle. The
+externally visible contract is identical to the general adapter: one
+``resp()`` per beat, ``is_first`` / ``is_last`` / ``burst_id`` / ``status``
+per beat, the first beat delayed by the slave's ``get_full_latency()``, and
+the same ownership rules (all read beats are distinct allocator-backed
+objects the master copies out of and frees; the master owns and frees its
+own burst request; write acks round-trip the master's request). Source:
 ``gvsoc/core/models/utils/io_v2_beat_to_sync_adapter.{hpp,cpp}``; the
 ``utils/io_v2_beat_to_sync_adapter`` test is a standalone exerciser.
 
@@ -1045,14 +1102,17 @@ that routes by request identity never sees a raw beat stream it cannot
 handle. Source: ``gvsoc/core/models/utils/io_v2_beat_collapse_adapter.cpp``.
 
 It keeps the classic round-trip on the master side (the master owns its
-request; the adapter hands that exact object back on completion) and uses
-new/delete on the beat side (it allocates a fresh downstream request whose
-data pointer aliases the master's buffer, consumes and frees the *N*
-response beats, then returns the master's own request as one big-packet
-reply on the last beat). It is **single-outstanding**: a second master
-access while one is in flight is ``DENIED`` and retried — so only place it
-behind a single-outstanding master (an in-order core, a single-refill
-i-cache).
+request; the adapter hands that exact object back on completion). On the
+beat side it forwards its own **reusable member request** (it is that
+request's initiator: nothing downstream frees it, and it only comes back
+as a write ack — so it needs no pool at all): data-less for reads, carrying
+the master's payload for writes. It consumes the *N* allocator-backed read
+response beats, copies each payload into the master's buffer at the running
+offset, frees the beats (``req->free()``), then returns the master's own
+request as one big-packet reply on the last beat. It is
+**single-outstanding**: a second master access while one is in flight is
+``DENIED`` and retried — so only place it behind a single-outstanding
+master (an in-order core, a single-refill i-cache).
 
 Generic mechanism
 ~~~~~~~~~~~~~~~~~
@@ -1145,10 +1205,13 @@ backed by code referenced in *See also*.
    async big-packet, beat stream). Narrow the signature
    (``IoV2Sync`` / ``IoV2SingleReq`` / ``IoV2Beat``) to legitimately
    restrict what you must handle — don't assume a form.
-2. **Hand the beat adapter a heap-allocated request for multi-beat
-   reads.** The adapter owns it and frees it on the last beat; a pooled,
-   embedded or stack object is a use-after-free / double-free. The
-   consuming side frees what it is given.
+2. **Allocate through ``IoReqAllocator`` on the beat protocol.** Any
+   request that crosses a consumer-frees boundary (a read burst request,
+   a read response beat) comes from a shared per-size pool
+   (``IoReqAllocator::get(size)``, fetched once at construction) and is
+   released with ``req->free()`` — never bare ``new`` / ``delete``. Read
+   burst requests are data-less; response beats carry the data in their
+   co-allocated payload, which must never be repointed.
 3. **Re-send a ``DENIED`` request synchronously inside ``retry()``** — same
    cycle, before the callback returns. Deferring it to a later cycle
    live-locks slaves (e.g. ``log_ico_v2``) whose accept window is only open
@@ -1156,9 +1219,11 @@ backed by code referenced in *See also*.
 4. **Tolerate per-beat address mutation.** A slave may leave ``addr`` at
    the burst base or advance it to ``burst_addr + emitted``; masters must
    accept either.
-5. **Free the response beats you receive.** For a multi-beat read the
-   terminal master frees each adapter-allocated beat; single-beat and write
-   responses arrive on your own round-tripped object.
+5. **Copy out and free the response beats you receive.** The terminal
+   master copies each read beat's payload into its destination buffer and
+   frees the beat (``req->free()``) — every read beat, single- or
+   multi-beat, is a distinct pooled object. Write acks arrive on your own
+   round-tripped object.
 6. **Choose the signature deliberately.** ``IoV2Sync`` for inline-only
    slaves; ``IoV2SingleReq`` for single-word, identity-routed routers and
    splitters; ``IoV2Beat`` for cycle-accurate per-beat consumers;
@@ -1177,10 +1242,12 @@ These are the cheapest mistakes to repeat, so they are called out
 explicitly.
 
 - **Pooled-object double-free.** A DMA issued reads on a request object
-  embedded in a pooled vector; the beat adapter ``delete``\d it on the last
-  beat, corrupting the heap (the crash surfaced only at teardown). *Rule:
-  heap-allocate any request handed to the adapter; the consuming side
-  frees it* (requirement 2).
+  embedded in a privately pooled vector; the consuming side ``delete``\d it,
+  corrupting the heap (the crash surfaced only at teardown). Private pools
+  can never work when the freer is not the allocator — which is the normal
+  case on the beat protocol. *Rule: allocate through the shared
+  ``IoReqAllocator`` and free with ``req->free()``; the back-pointer routes
+  the free to the right pool no matter who calls it* (requirement 2).
 - **Clock-bridge aliasing.** Reusing one request object across the *N*
   beats of a read response let a *deferring* downstream (a frequency-
   crossing clock bridge that queues the response) alias and lose beats.

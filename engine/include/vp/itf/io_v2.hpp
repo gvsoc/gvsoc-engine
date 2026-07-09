@@ -6,6 +6,10 @@
 
 #pragma once
 
+#include <map>
+#include <memory>
+#include <new>
+
 #include "vp/queue.hpp"
 #include "vp/vp.hpp"
 
@@ -66,6 +70,31 @@
 //     data with is_first/is_last/burst_id set per beat (beat-form write). The
 //     slave responds per-req in either case.
 //
+// Request allocation (beat protocol): any request that crosses a
+// consumer-frees boundary — a read burst request freed downstream, a read
+// response beat freed by the terminal master — must come from an
+// IoReqAllocator (see below) and be released with req->free(), never bare
+// new/delete. Allocators are shared per payload size (always a beat width,
+// or 0 for data-less requests) and recycle request + payload as one block,
+// removing the per-beat malloc/free round-trip. The rules that come with it:
+//
+//   - A read burst request carries no data (data == NULL). The producer of
+//     the response allocates each beat from its allocator; the beat's
+//     co-allocated payload holds the read data (the producer points its own
+//     downstream, non-beat read request at that payload so the target fills
+//     it directly, without an extra copy). The terminal master copies each
+//     beat's payload into its destination buffer, then frees the beat.
+//   - Write beats are unchanged: they round-trip back to the master as acks,
+//     nobody else frees them, and their data may keep pointing into the
+//     master's own buffer.
+//   - The data pointer of an allocator-provided request must never be
+//     repointed, and alloc() reinitializes no field: callers set
+//     addr/size/opcode/is_first/is_last/burst_id per beat, as after new.
+//   - Downstream requests to non-beat protocols (big-packet / sync /
+//     single-req) are never freed by the target; components keep reusing
+//     their own request objects there and may repoint their data (e.g. at a
+//     response beat's payload).
+//
 // Beat-fidelity components (cycle-accurate routers, cycle-accurate iDMAs) can
 // route their outgoing IoMaster through a BeatResponseAdapter (see
 // gvsoc/core/models/utils/io_v2_beat_adapter.hpp) which normalises whatever
@@ -95,6 +124,7 @@ namespace vp {
 
 class IoSlave;
 class IoReq;
+class IoReqAllocator;
 
 typedef enum
 {
@@ -248,6 +278,11 @@ class IoReq : public vp::QueueElem {
     void set_duration(int64_t v) { this->duration = std::max(this->duration, v); }
     int64_t get_full_latency() const { return this->latency + this->duration; }
 
+    // Return this request to its home pool. Only valid on allocator-provided
+    // requests (see IoReqAllocator); any component may call it, regardless of
+    // who allocated the request.
+    inline void free();
+
     // Reset per-send fields. Call before resubmitting a request object.
     void prepare()
     {
@@ -284,9 +319,103 @@ class IoReq : public vp::QueueElem {
     IoReq *next;
     IoReq *parent;
     void *initiator;
+    // Home pool of an allocator-provided request (see IoReqAllocator), so any
+    // consumer can free it to the right pool through free(). NULL on requests
+    // not obtained from an allocator.
+    IoReqAllocator *allocator = nullptr;
     // Temporary field
     uint64_t remaining_size;
 };
+
+// Pooled allocator for beat-protocol requests. One shared allocator per
+// payload size (see get()); the payload is co-allocated with the request in a
+// single block and req->data is set once to it (NULL for a size-0 allocator)
+// and must never be repointed. Any component can return a request to its home
+// pool with req->free(), regardless of who allocated it — the request carries
+// a back-pointer to its allocator. Single-threaded by design, like the rest
+// of the engine core.
+class IoReqAllocator
+{
+public:
+    // Return the shared allocator serving the given payload size, creating it
+    // on first use. Components fetch their allocator(s) once at construction —
+    // their beat width is static. Size 0 serves data-less requests (e.g. read
+    // burst requests, which carry no data).
+    static inline IoReqAllocator *get(uint64_t data_size);
+
+    // Pop a recycled request or lazily create one. No field is reinitialized
+    // on recycle: callers set addr/size/opcode/is_first/is_last/burst_id
+    // themselves, exactly as after a bare new.
+    inline IoReq *alloc();
+
+    // Push a request back to this pool. Usually reached through IoReq::free().
+    inline void free(IoReq *req);
+
+    // Releases the recycled blocks at process teardown (through the registry).
+    inline ~IoReqAllocator();
+
+private:
+    IoReqAllocator(uint64_t data_size) : data_size(data_size) {}
+
+    // Payload size co-allocated with every request of this pool
+    uint64_t data_size;
+    // Intrusive freelist threaded through IoReq::next
+    IoReq *first_free = nullptr;
+};
+
+inline IoReqAllocator *IoReqAllocator::get(uint64_t data_size)
+{
+    // Function-local static so the registry is unique across all translation
+    // units and torn down at process exit (the unique_ptrs free the pools so
+    // recycled blocks don't show up as leaks).
+    static std::map<uint64_t, std::unique_ptr<IoReqAllocator>> allocators;
+    std::unique_ptr<IoReqAllocator> &allocator = allocators[data_size];
+    if (allocator == nullptr)
+    {
+        allocator.reset(new IoReqAllocator(data_size));
+    }
+    return allocator.get();
+}
+
+inline IoReq *IoReqAllocator::alloc()
+{
+    IoReq *req = this->first_free;
+    if (req != NULL)
+    {
+        this->first_free = req->next;
+        return req;
+    }
+
+    // Grow path: a single block holding the request and its payload, so a
+    // request costs one allocation and request + payload share cache lines.
+    size_t data_offset = (sizeof(IoReq) + 7) & ~(size_t)7;
+    uint8_t *block = new uint8_t[data_offset + this->data_size];
+    req = new (block) IoReq();
+    req->data = this->data_size != 0 ? block + data_offset : NULL;
+    req->allocator = this;
+    return req;
+}
+
+inline void IoReqAllocator::free(IoReq *req)
+{
+    req->next = this->first_free;
+    this->first_free = req;
+}
+
+inline IoReqAllocator::~IoReqAllocator()
+{
+    while (this->first_free != NULL)
+    {
+        IoReq *req = this->first_free;
+        this->first_free = req->next;
+        delete[] (uint8_t *)req;
+    }
+}
+
+inline void IoReq::free()
+{
+    this->allocator->free(this);
+}
 
 /*
  * Class for IO master ports
