@@ -32,7 +32,21 @@ class DisplayPulse(object):
         return { 'type': 'pulse' }
 
 class DisplayAnalog(object):
+    """Analog curve display.
+
+    Parameters
+    ----------
+    aggregation : str, optional
+        How zoomed-out slots and area averages combine the values of their time
+        range: 'average' (time-weighted mean, default, e.g. power) or 'max'
+        (peaks stay visible, e.g. stack usage).
+    """
+    def __init__(self, aggregation: str='average'):
+        self.aggregation = aggregation
+
     def get(self):
+        if self.aggregation == 'max':
+            return { 'type': 'analog', 'aggregation': 'max' }
         return { 'type': 'analog' }
 
 class DisplayBox(object):
