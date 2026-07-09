@@ -938,11 +938,15 @@ the slave side never triggers insertion. Four signatures exist
      - vs a beat slave → ``IoV2BeatCollapseAdapter``
    * - ``IoV2Beat(beat_width)``
      - Cycle-accurate consumer that wants **one** ``resp()`` per beat
-       regardless of the slave's form. ``beat_width`` must match a beat
-       peer; differing widths are a design error, not a missing adapter.
+       regardless of the slave's form. A same-width beat peer binds
+       directly; a beat peer with a *different* width gets the width
+       adapter (the wider width must be an integer multiple of the
+       narrower one).
      - vs an ``IoV2Sync`` slave → ``IoV2BeatToSyncAdapter``; vs an
        ``IoV2SingleReq`` slave → ``IoV2BeatToSingleReqAdapter``; vs an
-       ``IoV2BigPacket`` / legacy slave → ``IoV2BeatAdapter``
+       ``IoV2BigPacket`` / legacy slave → ``IoV2BeatAdapter``; vs an
+       ``IoV2Beat`` slave of a different width →
+       ``IoV2BeatWidthAdapter``
 
 The adapters below are auto-inserted from these rules. Start with the
 beat adapter, which the cycle-accurate masters (``router_v2_beat``, the
@@ -1113,6 +1117,76 @@ request as one big-packet reply on the last beat. It is
 **single-outstanding**: a second master access while one is in flight is
 ``DENIED`` and retried — so only place it behind a single-outstanding
 master (an in-order core, a single-refill i-cache).
+
+The width adapter
+~~~~~~~~~~~~~~~~~~
+
+``IoV2BeatWidthAdapter`` is the per-combination adapter for an
+``IoV2Beat`` master bound to an ``IoV2Beat`` slave of a **different**
+width — the HW bus up/down-sizer. Both sides speak the beat sub-protocol
+unchanged; the adapter only converts the beat granularity, repacking the
+per-beat streams in both directions (*N* narrow beats ↔ one wide beat, at
+cumulative-offset boundaries, short terminal beats included). The wider
+width must be an integer multiple of the narrower one (anything else is
+rejected at build).
+
+The point of the conversion is that **each side runs at its own
+bandwidth**: at most one beat per cycle per channel *at its own width*.
+The narrow side streams every cycle at full occupancy while the wide side
+carries the same bytes in fewer, wider beats — one every *ratio* cycles —
+with back-pressure keeping both sides honest:
+
+* **Read, narrow slave**: downstream beats arrive one per cycle and are
+  packed; a wide upstream beat completes every *ratio* cycles.
+* **Read, wide slave**: each wide downstream beat unpacks into *ratio*
+  upstream beats (one per cycle); further downstream beats are refused
+  (``IO_RESP_DENIED`` + later ``resp_retry()``), throttling the producer
+  to one wide beat per *ratio* cycles.
+* **Write, narrow slave**: each upstream write request is chopped into
+  one-per-cycle downstream beats; further upstream write requests are
+  ``DENIED`` while the chop backlog is full and re-enabled with
+  ``retry(WRITE)`` — a beat-form writer is throttled to one wide beat
+  every *ratio* cycles.
+* **Write, wide slave**: consecutive upstream write beats of one burst
+  are packed (payload copied into the allocator-backed chunk) into one
+  wide downstream beat issued every *ratio* cycles; each upstream request
+  is acked once all its covering chunks are acked, one ack per
+  ``input_width`` stride.
+
+Both back-pressure points sit behind **configurable FIFOs**, so the
+adapter can absorb workload before it starts denying:
+
+* ``read_fifo_depth`` (in ``input_width`` beats) bounds the repacked
+  upstream read beats buffered before the downstream producer is refused.
+  Auto (0) = 2× the width ratio — double-buffering, the minimum for
+  continuous streaming. Deeper absorbs e.g. an upstream master that
+  stalls its response channel, without ever stalling the downstream.
+* ``write_fifo_depth`` (in ``output_width`` chunks) bounds the complete,
+  un-issued downstream write chunks buffered before upstream write
+  requests are refused. Auto (0) = 2 — just enough for seamless chunk
+  streaming. Deep enough (burst bytes / ``output_width``) and a beat-form
+  writer streams its whole burst at the upstream rate with no
+  back-pressure at all, the FIFO then draining at the downstream rate.
+
+The auto-inserted bridge uses the defaults; instantiate the adapter
+manually (``utils.io_v2_beat_width_adapter.IoV2BeatWidthAdapter``) to set
+non-default depths — the signature checks keep a user-instantiated
+adapter on the path.
+
+Ownership follows the initiator-owned convention on both faces: upstream
+read beats are distinct allocator-backed objects the terminal master
+frees; write acks round-trip the upstream master's own request; the
+downstream read descriptor and write chunks are the adapter's own
+allocator-backed objects.
+
+Parameters (``input_width``, ``output_width``, ``read_fifo_depth``,
+``write_fifo_depth``) come from the generated config tree
+(``IoV2BeatWidthAdapterConfig``). Source:
+``gvsoc/core/models/utils/io_v2_beat_width_adapter.{hpp,cpp}``; the
+``utils/io_v2_beat_width_adapter`` test is a standalone exerciser whose
+checkers assert the per-side beat counts *and spacings* (e.g. a 32 B read
+at 8→4 must show eight 4 B beats every cycle downstream against four 8 B
+beats every 2 cycles upstream).
 
 Generic mechanism
 ~~~~~~~~~~~~~~~~~

@@ -274,8 +274,17 @@ class IoV2Beat(Signature):
         if isinstance(other, IoV2BigPacket) or other == IoV2BigPacket.tag:
             from utils.io_v2_beat_adapter import IoV2BeatAdapter
             return IoV2BeatAdapter(parent, name, beat_width=self.beat_width)
-        # IoV2Beat <-> IoV2Beat with differing widths is a SoC design error,
-        # not a missing adapter.
+        # IoV2Beat slave with a DIFFERENT width (same-width peers bound directly
+        # above): both sides speak the beat sub-protocol, only the granularity
+        # changes. Insert the width-conversion adapter, which repacks the
+        # per-beat streams in both directions (N narrow beats <-> one wide
+        # beat) so each side runs at its own beat width — the two bindings then
+        # show different per-cycle occupancies. The wider width must be an
+        # integer multiple of the narrower one (checked by the adapter).
+        if isinstance(other, IoV2Beat):
+            from utils.io_v2_beat_width_adapter import IoV2BeatWidthAdapter
+            return IoV2BeatWidthAdapter(parent, name,
+                input_width=self.beat_width, output_width=other.beat_width)
         return super().bridge_to(other, parent, name)
 
 
