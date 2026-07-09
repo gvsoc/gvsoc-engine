@@ -193,6 +193,9 @@ namespace vp {
     va_start(ap, fmt);
     if (vfprintf(this->trace_file, fmt, ap) < 0) {}
     va_end(ap);
+    // abort() does not flush stdio; without this the message is lost when
+    // stdout is a pipe (block-buffered), e.g. under gvrun output capture
+    fflush(this->trace_file);
     abort();
   }
 
