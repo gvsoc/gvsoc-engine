@@ -1031,6 +1031,7 @@ else:
             dataclass cfgs).
             """
             from gvsoc.signature import Signature, IoV2BigPacket, IoV2Sync, IoV2Beat
+            from gvsoc.signature import assert_io_v2_strict
             from gvsoc import clock_bridges
             expanded = []
             clock_by_comp = {}
@@ -1042,6 +1043,13 @@ else:
             for binding in self.bindings:
                 master_sig = binding[6] if len(binding) > 6 else None
                 slave_sig = binding[7] if len(binding) > 7 else None
+                # Strict-protocol gate: forbid the retired generic big-packet
+                # io_v2 on either end unless the escape hatch is enabled (see
+                # the gvrun2 twin in systree_gvrun2.py).
+                assert_io_v2_strict(
+                    master_sig, slave_sig,
+                    f'{binding[0].get_path()}:{binding[1]} -> '
+                    f'{binding[2].get_path()}:{binding[3]}')
                 if not isinstance(master_sig, Signature):
                     expanded.append(binding)
                     continue

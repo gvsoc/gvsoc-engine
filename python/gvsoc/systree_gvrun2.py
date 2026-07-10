@@ -904,6 +904,7 @@ class Component(gvrun.target.SystemTreeNode):
         is fully clocked without the user having to wire it manually.
         """
         from gvsoc.signature import IoV2BigPacket, IoV2Sync, IoV2Beat
+        from gvsoc.signature import assert_io_v2_strict
         from gvsoc import clock_bridges
         expanded = []
         # Pre-index existing clock bindings so we can clone the master's
@@ -918,6 +919,14 @@ class Component(gvrun.target.SystemTreeNode):
         for binding in self.bindings:
             master_sig = binding[6]
             slave_sig = binding[7]
+            # Strict-protocol gate: forbid the retired generic big-packet
+            # io_v2 (bare 'io_v2' string or IoV2BigPacket) on either end,
+            # unless the escape hatch is enabled. Runs before the
+            # isinstance(Signature) skip so a bare-string master is caught too.
+            assert_io_v2_strict(
+                master_sig, slave_sig,
+                f'{binding[0].get_path()}:{binding[1]} -> '
+                f'{binding[2].get_path()}:{binding[3]}')
             if not isinstance(master_sig, Signature):
                 expanded.append(binding)
                 continue

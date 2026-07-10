@@ -28,7 +28,56 @@ beat-mode, strict-sync) along the protocol axis. The same mechanism is the
 natural extension point for clock-domain crossings, voltage-domain
 crossings, address-width adapters, etc. Subclasses add the checks; the
 binding machinery in systree_gvrun2.py does not need to grow.
+
+Strict-protocol policy
+----------------------
+
+A class-based :class:`IoV2BigPacket` — the retired generic io_v2 form — is a
+hard error when the systree is flattened (see :func:`assert_io_v2_strict`,
+called from the bridge pass in systree.py / systree_gvrun2.py), forcing new
+ports onto the concrete sub-protocols (:class:`IoV2Sync`,
+:class:`IoV2SingleReq`, :class:`IoV2Beat`, :class:`IoV2Any`). A port that
+still genuinely needs big-packet opts in explicitly per instance with
+``IoV2BigPacket(allow=True)``.
+
+The bare ``signature='io_v2'`` string is left permitted: it is the historic
+big-packet spelling, still used only by the stand-alone stub tests, and —
+unlike a class instance — a string master is skipped by the auto-bridge pass
+(so it keeps the raw, adapter-free binding those tests rely on).
 """
+
+
+def is_loose_io_v2(sig) -> bool:
+    """True if ``sig`` is a forbidden generic big-packet io_v2 instance.
+
+    Only a class-based :class:`IoV2BigPacket` constructed without
+    ``allow=True`` is loose. The bare ``'io_v2'`` string is permitted (see
+    the module docstring), and every concrete signature (Sync / SingleReq /
+    Beat / Any) and non-io interface is not loose.
+    """
+    if isinstance(sig, Signature):
+        return not sig.is_concrete_protocol()
+    return False
+
+
+def assert_io_v2_strict(master_sig, slave_sig, binding_desc):
+    """Raise unless both endpoints commit to a concrete io_v2 sub-protocol.
+
+    ``binding_desc`` is a human-readable ``master:port -> slave:port`` string
+    used in the error.
+    """
+    for role, sig in (('master', master_sig), ('slave', slave_sig)):
+        if is_loose_io_v2(sig):
+            shown = sig.label() if isinstance(sig, Signature) else repr(sig)
+            raise RuntimeError(
+                f"Forbidden generic big-packet io_v2 on the {role} port of "
+                f"binding {binding_desc} (signature {shown}). Declare a "
+                f"concrete protocol instead: IoV2Sync (inline DONE), "
+                f"IoV2SingleReq (single-beat, identity-routed), "
+                f"IoV2Beat(width) (per-beat stream) or IoV2Any "
+                f"(explicit transparent forwarder). If big-packet is really "
+                f"needed while it is being prototyped, opt in explicitly with "
+                f"IoV2BigPacket(allow=True).")
 
 
 class Signature:
@@ -50,6 +99,16 @@ class Signature:
         name. Defaults to the legacy tag, falling back to the class name.
         """
         return self.tag or type(self).__name__
+
+    def is_concrete_protocol(self):
+        """Whether this signature names a specific, committed protocol.
+
+        Only the retired generic big-packet io_v2 (:class:`IoV2BigPacket`)
+        returns False; every other signature — the concrete io_v2
+        sub-protocols and all non-io interfaces — is concrete. Used by the
+        strict-protocol policy (:func:`is_loose_io_v2`).
+        """
+        return True
 
     def is_compatible(self, other):
         """Return True if a master with ``self`` can bind directly to a slave with ``other``.
@@ -89,12 +148,26 @@ class IoV2BigPacket(Signature):
     A :class:`IoV2Sync` slave is a strict subset of this contract (only the
     sync DONE response form), so a big-packet master can bind to it directly
     without any adapter.
+
+    Big-packet is the retired generic form: the strict-protocol policy
+    rejects it by default. A port that still genuinely needs it — e.g. a
+    model whose response form is being prototyped — opts in explicitly with
+    ``IoV2BigPacket(allow=True)``, which documents the intent at the call
+    site instead of relying on a global switch.
     """
 
     tag = 'io_v2'
 
+    def __init__(self, allow: bool = False):
+        self.allow = allow
+
     def label(self):
         return 'io_v2 (big-packet)'
+
+    def is_concrete_protocol(self):
+        # Forbidden by the strict-protocol policy unless this instance was
+        # explicitly allowed (IoV2BigPacket(allow=True)).
+        return self.allow
 
     def is_compatible(self, other):
         # Legacy 'io_v2' string slave is the historic big-packet default.
@@ -102,8 +175,8 @@ class IoV2BigPacket(Signature):
             return other == self.tag
         # IoV2Sync and IoV2SingleReq are tighter subsets of the same response
         # surface; a big-packet master already handles their (single-beat)
-        # responses, so it binds directly.
-        return isinstance(other, (IoV2BigPacket, IoV2Sync, IoV2SingleReq))
+        # responses, so it binds directly. IoV2Any is a transparent peer.
+        return isinstance(other, (IoV2BigPacket, IoV2Sync, IoV2SingleReq, IoV2Any))
 
     def bridge_to(self, other, parent, name):
         # A big-packet master cannot consume the per-beat response stream of a
@@ -175,6 +248,9 @@ class IoV2SingleReq(Signature):
             return other == self.tag
         # Direct to any single-beat peer (single-req / big-packet / sync). A
         # beat peer (multi-beat) is handled in bridge_to.
+        if isinstance(other, IoV2Any):
+            # Transparent forwarder — relays the single-beat response 1:1.
+            return True
         if isinstance(other, IoV2SingleReq):
             # Width rule: a width-0 slave accepts anything (don't care). A
             # width-declaring slave binds directly only to a master that
@@ -318,7 +394,12 @@ class IoV2Beat(Signature):
         # adapter normalises any of the slave's response forms (sync DONE, async
         # big-packet, beat stream) into a uniform per-beat stream. The legacy
         # string is the historic v2 default and matches IoV2BigPacket semantics.
-        if isinstance(other, IoV2BigPacket) or other == IoV2BigPacket.tag:
+        #
+        # An IoV2Any slave gets the same treatment: transparency means the
+        # response form is whatever the far end of the chain produces, which a
+        # beat-fidelity master must never see raw (an inline DONE would trip
+        # its "must not surface IO_REQ_DONE" contract) — so normalise it.
+        if isinstance(other, (IoV2BigPacket, IoV2Any)) or other == IoV2BigPacket.tag:
             from utils.io_v2_beat_adapter import IoV2BeatAdapter
             return IoV2BeatAdapter(parent, name, beat_width=self.beat_width)
         # IoV2Beat slave with a DIFFERENT width (same-width peers bound directly
@@ -332,6 +413,73 @@ class IoV2Beat(Signature):
             from utils.io_v2_beat_width_adapter import IoV2BeatWidthAdapter
             return IoV2BeatWidthAdapter(parent, name,
                 input_width=self.beat_width, output_width=other.beat_width)
+        return super().bridge_to(other, parent, name)
+
+
+class IoV2Any(Signature):
+    """io_v2 port that is deliberately protocol-transparent.
+
+    Declared by pass-through forwarders — the remapper, limiter, fifo,
+    traffic stubs and clock bridge — that carry a request and relay its
+    response 1:1 without caring which of the three v2 response forms
+    (sync DONE / async big-packet / beat stream) flows through them.
+
+    Unlike the retired :class:`IoV2BigPacket`, this is an *explicit,
+    intentional* "any": the strict-protocol policy allows it, but only where
+    transparency is the genuine behaviour, not as a lazy default for a leaf
+    model that should commit to a concrete contract. A transparent forwarder
+    declares ``IoV2Any`` on BOTH its input (slave) and output (master) ports.
+
+    As a master it binds directly to every io_v2 slave: whatever the upstream
+    sent, it forwards, and whatever form the downstream answers with, it
+    relays back. As a slave it binds directly to big-packet / single-req
+    masters (they tolerate every response form that can emerge from the
+    chain), but a beat-fidelity :class:`IoV2Beat` master inserts its general
+    normalising adapter in front of it — transparency means the response
+    form is unknown, and a beat master must never see a raw inline ``DONE``.
+
+    ``beat_tolerant`` marks a *terminal* master that natively consumes raw
+    per-beat response streams of any width (e.g. the traffic generator,
+    which measures a NoC's bandwidth and must observe the stream
+    unmodified). Such a master binds directly to an :class:`IoV2Beat`
+    slave instead of getting the (single-outstanding, stream-folding)
+    collapse adapter a plain transparent forwarder needs.
+    """
+
+    tag = 'io_v2'
+
+    def __init__(self, beat_tolerant: bool = False):
+        self.beat_tolerant = beat_tolerant
+
+    def label(self):
+        if self.beat_tolerant:
+            return 'io_v2 (any/beat-tolerant)'
+        return 'io_v2 (any/transparent)'
+
+    def is_compatible(self, other):
+        if isinstance(other, str):
+            return other == self.tag
+        return isinstance(other, (IoV2Any, IoV2BigPacket, IoV2SingleReq,
+                                  IoV2Sync))
+
+    def bridge_to(self, other, parent, name):
+        # A beat-tolerant terminal master consumes the raw beat stream
+        # itself: direct bind, no adapter (see the class docstring).
+        if self.beat_tolerant and isinstance(other, IoV2Beat):
+            return None
+        # A beat slave streams per-beat responses and requires beat-form
+        # writes — the one response form a transparent chain cannot promise
+        # its (unknown) upstream master tolerates. Insert the collapse
+        # adapter, exactly as the retired IoV2BigPacket master did: it
+        # forwards the access as beats and folds the response stream back
+        # into a single reply.
+        if isinstance(other, IoV2Beat):
+            from utils.io_v2_beat_collapse_adapter import IoV2BeatCollapseAdapter
+            return IoV2BeatCollapseAdapter(parent, name, beat_width=other.beat_width)
+        # Everything else: transparent, forwards any io_v2 form 1:1 with no
+        # adapter.
+        if self.is_compatible(other):
+            return None
         return super().bridge_to(other, parent, name)
 
 
