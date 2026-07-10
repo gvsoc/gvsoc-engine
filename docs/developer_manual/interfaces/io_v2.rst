@@ -928,14 +928,22 @@ the slave side never triggers insertion. Four signatures exist
        ``IoV2Sync`` — anything else is a build-time error (no adapter can
        synthesise an inline response from an async slave).
      - none (a mismatch is a design error, raised at build)
-   * - ``IoV2SingleReq``
+   * - ``IoV2SingleReq(width=0)``
      - Single-word / single-beat accesses only (the HW lint
        ``req`` / ``gnt`` / ``r_valid`` fabric). Used by components that
        route a response by **request identity** — functional and bandwidth
        routers (``in_flight_map[req]``) and width/opcode splitters
        (``req->parent``) — which therefore cannot handle a multi-beat
        stream. Allows async + deny, never a multi-beat response.
-     - vs a beat slave → ``IoV2SingleReqToBeatAdapter``
+       ``width`` (power of two, optional) bounds the access granule: on a
+       slave it declares the largest aligned granule one access may cover
+       (a bank-interleaved fabric); on a master, the widest access it
+       issues. ``0`` = don't care: a width-0 slave accepts anything
+       directly.
+     - vs a beat slave → ``IoV2SingleReqToBeatAdapter``; vs a
+       width-declaring single-req slave, when the master does not
+       provably fit its granule (wider, or width-0/unknown) →
+       ``IoV2SingleReqWidthAdapter``
    * - ``IoV2Beat(beat_width)``
      - Cycle-accurate consumer that wants **one** ``resp()`` per beat
        regardless of the slave's form. A same-width beat peer binds
@@ -1159,8 +1167,50 @@ generated config tree (``IoV2SingleReqToBeatAdapterConfig``). Source:
 whose ``pipelined`` cases prove several accesses stay outstanding
 concurrently with no back-pressure.
 
-The width adapter
-~~~~~~~~~~~~~~~~~~
+The single-req width adapter
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``IoV2SingleReqWidthAdapter`` enforces a single-req slave's declared
+width granule. The motivating case is a bank-interleaved fabric — the
+GAP9 shared-L2 ``LogIco`` with a 4-byte interleave — which decodes the
+bank from the address and forwards the **whole** request there: an
+access crossing an aligned granule boundary would land in one bank and,
+because bank-local addresses are compressed, silently **alias a
+different global address**. Historically the guarantee was purely by
+construction (hand-wired lane splitters, masters known to be narrow);
+declaring ``IoV2SingleReq(width=granule)`` on the fabric input makes it
+a build-time property instead: any single-req master that does not
+provably fit (wider declared width, or the common width-0/unknown one)
+gets this adapter auto-inserted.
+
+The adapter is nearly free: an access that fits one aligned granule
+(``(addr % width) + size <= width``) passes straight through — the
+master's own object forwarded, all three outcomes mapped 1:1, any
+number outstanding, no state touched. Only a straddling access engages
+the split machinery: it is chopped into granule-aligned sub-accesses
+(no copy — sub-requests point into the master's buffer) issued
+sequentially through one embedded, reused sub-request, and the master
+still gets its own request back — inline ``IO_REQ_DONE`` when every
+chunk completed inline (latency folded as ``max(chunk_index +
+chunk_latency)``, a back-to-back issue sequence), or one ``resp()``
+when the last chunk lands. Atomics are never split (``traces.assert``);
+one split is active at a time (a second is DENIED and retried on
+completion; fitting accesses are never blocked). A DENY of the *first*
+chunk aborts the split statelessly — the master re-sends on the
+forwarded retry; a mid-split DENY is held and re-sent inside
+``retry()``.
+
+``log_ico_v2`` additionally checks the granule at run time
+(``traces.assert``, asserts builds), so an unchecked legacy binding
+that lets a straddling access through aborts loudly instead of
+corrupting memory. Parameters (``width``) come from the generated
+config tree (``IoV2SingleReqWidthAdapterConfig``). Source:
+``gvsoc/core/models/utils/io_v2_single_req_width_adapter.cpp``; the
+``utils/io_v2_single_req_width_adapter`` test is a standalone exerciser
+whose checkers pin the exact chunk sequences the fabric sees.
+
+The beat width adapter
+~~~~~~~~~~~~~~~~~~~~~~~
 
 ``IoV2BeatWidthAdapter`` is the per-combination adapter for an
 ``IoV2Beat`` master bound to an ``IoV2Beat`` slave of a **different**

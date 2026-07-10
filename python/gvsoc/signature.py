@@ -137,11 +137,37 @@ class IoV2SingleReq(Signature):
     they cannot handle the per-beat stream of a beat slave. Declaring
     IoV2SingleReq makes that a checked invariant rather than an implicit
     assumption: a beat master/slave on the other side forces a converter.
+
+    ``width`` (bytes, power of two) optionally bounds the access granule:
+
+      - On a **slave**, it declares the largest aligned granule one access may
+        cover — the natural fit for a bank-interleaved fabric (e.g. the GAP9
+        shared-L2 ``LogIco`` with 4-byte interleaving), where an access
+        crossing a granule boundary would be mis-routed to a single bank and
+        alias another address.
+      - On a **master**, it declares the widest access it ever issues.
+
+    The default ``0`` means *don't care*: a width-0 **slave** accepts any
+    single-req access directly (today's behaviour, unchecked). Once a slave
+    declares a width, only a master that **provably** fits (its own declared
+    width is non-zero and no larger) binds directly; any other master — one
+    declaring a wider width, or the common width-0 master whose access sizes
+    are unknown — gets ``IoV2SingleReqWidthAdapter`` auto-inserted, which
+    passes fitting accesses straight through and chops a granule-straddling
+    one into granule-aligned sub-accesses, preserving the identity contract.
     """
 
     tag = 'io_v2'
 
+    def __init__(self, width: int = 0):
+        if width < 0 or (width & (width - 1)) != 0:
+            raise RuntimeError(
+                f'IoV2SingleReq width must be 0 or a power of two (got {width})')
+        self.width = width
+
     def label(self):
+        if self.width:
+            return f'io_v2 (single-req, width={self.width})'
         return 'io_v2 (single-req)'
 
     def is_compatible(self, other):
@@ -149,7 +175,16 @@ class IoV2SingleReq(Signature):
             return other == self.tag
         # Direct to any single-beat peer (single-req / big-packet / sync). A
         # beat peer (multi-beat) is handled in bridge_to.
-        return isinstance(other, (IoV2SingleReq, IoV2BigPacket, IoV2Sync))
+        if isinstance(other, IoV2SingleReq):
+            # Width rule: a width-0 slave accepts anything (don't care). A
+            # width-declaring slave binds directly only to a master that
+            # provably fits its granule (declared, non-zero, no wider);
+            # everything else — wider or unknown (0) masters — goes through
+            # the width adapter (see bridge_to).
+            if other.width == 0:
+                return True
+            return self.width != 0 and self.width <= other.width
+        return isinstance(other, (IoV2BigPacket, IoV2Sync))
 
     def bridge_to(self, other, parent, name):
         # A beat slave streams distinct, allocator-backed response beats this
@@ -163,6 +198,13 @@ class IoV2SingleReq(Signature):
             from utils.io_v2_single_req_to_beat_adapter import IoV2SingleReqToBeatAdapter
             return IoV2SingleReqToBeatAdapter(parent, name,
                                               beat_width=other.beat_width)
+        # Single-req slave with a tighter width granule than this master
+        # guarantees (see the class docstring): insert the width adapter,
+        # which splits each too-wide or granule-straddling access into
+        # granule-aligned sub-accesses while preserving the identity contract.
+        if isinstance(other, IoV2SingleReq) and not self.is_compatible(other):
+            from utils.io_v2_single_req_width_adapter import IoV2SingleReqWidthAdapter
+            return IoV2SingleReqWidthAdapter(parent, name, width=other.width)
         return None
 
 
