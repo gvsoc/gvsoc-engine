@@ -152,12 +152,17 @@ class IoV2SingleReq(Signature):
         return isinstance(other, (IoV2SingleReq, IoV2BigPacket, IoV2Sync))
 
     def bridge_to(self, other, parent, name):
-        # A beat slave streams multi-beat responses this single-req master
-        # cannot consume: insert the collapse converter (beat -> single-beat),
-        # exactly as a big-packet master would.
+        # A beat slave streams distinct, allocator-backed response beats this
+        # identity-routing master cannot consume: insert the dedicated
+        # single-req -> beat adapter. It translates the allocation conventions
+        # (frees the read beats, hands the master back its own request) and,
+        # because a single-req master carries its own per-request state, it
+        # supports any number of outstanding accesses — unlike the
+        # single-outstanding collapse adapter a big-packet master gets.
         if isinstance(other, IoV2Beat):
-            from utils.io_v2_beat_collapse_adapter import IoV2BeatCollapseAdapter
-            return IoV2BeatCollapseAdapter(parent, name, beat_width=other.beat_width)
+            from utils.io_v2_single_req_to_beat_adapter import IoV2SingleReqToBeatAdapter
+            return IoV2SingleReqToBeatAdapter(parent, name,
+                                              beat_width=other.beat_width)
         return None
 
 

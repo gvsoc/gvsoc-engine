@@ -935,7 +935,7 @@ the slave side never triggers insertion. Four signatures exist
        routers (``in_flight_map[req]``) and width/opcode splitters
        (``req->parent``) — which therefore cannot handle a multi-beat
        stream. Allows async + deny, never a multi-beat response.
-     - vs a beat slave → ``IoV2BeatCollapseAdapter``
+     - vs a beat slave → ``IoV2SingleReqToBeatAdapter``
    * - ``IoV2Beat(beat_width)``
      - Cycle-accurate consumer that wants **one** ``resp()`` per beat
        regardless of the slave's form. A same-width beat peer binds
@@ -1100,10 +1100,11 @@ The collapse adapter
 
 ``IoV2BeatCollapseAdapter`` is the inverse: it makes a beat-streaming
 slave (e.g. a ``KIND_BEAT`` router) look like a plain big-packet slave to
-an ``IoV2BigPacket`` or ``IoV2SingleReq`` master. The binding pass inserts
-it whenever such a master binds a beat slave — so a *functional* router
-that routes by request identity never sees a raw beat stream it cannot
-handle. Source: ``gvsoc/core/models/utils/io_v2_beat_collapse_adapter.cpp``.
+an ``IoV2BigPacket`` master (a single-req master gets the dedicated
+``IoV2SingleReqToBeatAdapter`` below instead). The binding pass inserts
+it whenever such a master binds a beat slave — so a big-packet master
+never sees a raw beat stream it cannot handle. Source:
+``gvsoc/core/models/utils/io_v2_beat_collapse_adapter.cpp``.
 
 It keeps the classic round-trip on the master side (the master owns its
 request; the adapter hands that exact object back on completion). On the
@@ -1117,6 +1118,46 @@ request as one big-packet reply on the last beat. It is
 **single-outstanding**: a second master access while one is in flight is
 ``DENIED`` and retried — so only place it behind a single-outstanding
 master (an in-order core, a single-refill i-cache).
+
+The single-req-to-beat adapter
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``IoV2SingleReqToBeatAdapter`` is the per-combination replacement of the
+collapse adapter for an ``IoV2SingleReq`` master bound to a beat slave —
+the boundary the ISS LSU crosses onto a ``KIND_BEAT`` plane. A single-req
+master carries its own per-request state and correlates the response by
+object identity, so the adapter's only substantive job is translating the
+two **allocation conventions**: downstream read data arrives in distinct
+allocator-backed beats (copied into the master's buffer and freed,
+``req->free()``), while the upstream response hands the master back its
+**own** request object. No allocator is involved on the adapter's own
+path: writes and atomics are forwarded as the master's own object (a
+write legitimately round-trips as the ack with data pointing into the
+master's buffer, and atomics keep ``data`` / ``second_data`` without
+copying), and each read's downstream data-less request is embedded in a
+pooled per-access context.
+
+What it drops, relative to the collapse adapter, is the
+**single-outstanding serialisation**: because each read has its own
+context (correlated through the beats' ``initiator``), any number of
+accesses can be in flight concurrently — a pipelined LSU
+(``nb_outstanding > 1``) is no longer stalled at the boundary, matching
+the HW ``req``/``gnt``/``r_valid`` fabric it models. Flow control is
+completely stateless: a downstream ``DENIED`` propagates straight
+upstream (the master holds its own request, per the single-req contract)
+and ``retry()`` is a pure pass-through. Zero added latency, no clock
+events; inline ``DONE``\ s (writes, zero-size or error reads) are relayed
+inline with their timing annotations untouched.
+
+The single-beat response expectation is **checked** with ``traces.assert``
+(asserts builds) for accesses that fit in one downstream beat; an access
+wider than the beat plane is reassembled through a fill cursor, exactly
+like the collapse adapter. Parameters (``beat_width``) come from the
+generated config tree (``IoV2SingleReqToBeatAdapterConfig``). Source:
+``gvsoc/core/models/utils/io_v2_single_req_to_beat_adapter.cpp``; the
+``utils/io_v2_single_req_to_beat_adapter`` test is a standalone exerciser
+whose ``pipelined`` cases prove several accesses stay outstanding
+concurrently with no back-pressure.
 
 The width adapter
 ~~~~~~~~~~~~~~~~~~
