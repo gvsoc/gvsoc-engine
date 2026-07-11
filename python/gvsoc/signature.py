@@ -352,9 +352,16 @@ class IoV2Sync(Signature):
 class IoV2Beat(Signature):
     """io_v2 master that wants its response normalised to one ``resp()`` per beat.
 
-    The master receives one ``resp_meth`` call per beat with ``req->is_first``,
-    ``is_last``, ``burst_id``, ``size``, ``data`` and ``status`` set per beat
-    (the existing beat-form response contract of v2).
+    For reads, the master receives one ``resp_meth`` call per beat with
+    ``req->is_first``, ``is_last``, ``burst_id``, ``size``, ``data`` and
+    ``status`` set per beat (the beat-form response contract of v2).
+
+    Writes are acknowledged once per BURST (AXI B-channel semantics): the
+    master sends allocator-backed write beats the target consumes and frees
+    (GRANTED, no per-beat resp()), and the burst completes with either an
+    inline ``IO_REQ_DONE`` on the last beat or a single data-less
+    allocator-backed ack the master frees. See io_v2.hpp, "Write
+    acknowledgement".
     """
 
     tag = 'io_v2'
@@ -443,7 +450,10 @@ class IoV2Any(Signature):
     which measures a NoC's bandwidth and must observe the stream
     unmodified). Such a master binds directly to an :class:`IoV2Beat`
     slave instead of getting the (single-outstanding, stream-folding)
-    collapse adapter a plain transparent forwarder needs.
+    collapse adapter a plain transparent forwarder needs. Binding raw to
+    a beat slave, it must also follow the beat-plane write rules
+    (allocator-backed write beats the target frees, one burst ack — see
+    :class:`IoV2Beat`).
     """
 
     tag = 'io_v2'

@@ -24,7 +24,10 @@
 //
 //
 // Any single IoReq submitted via IoMaster::req() may be answered by the slave in
-// one of three forms. All three are valid and must be tolerated by masters:
+// one of three forms. All three are valid and must be tolerated by masters.
+// (This applies to reads and to writes on non-beat bindings; write beats on a
+// beat binding follow the per-burst acknowledgement rules further down —
+// "Write acknowledgement".)
 //
 //   1. Sync big-packet:   slave returns IO_REQ_DONE inline with req->data filled
 //                         and req->status set. No later resp() fires.
@@ -64,19 +67,96 @@
 //
 //   - A read burst is always submitted as exactly one req() with
 //     size = total_burst_bytes, is_first = is_last = true. The response shape is
-//     the slave's choice (any of the three forms above).
+//     the slave's choice (any of the three forms above). READS ARE UNCHANGED
+//     by the write-acknowledgement rules below.
 //   - A write burst may be submitted as either one req() carrying the full
-//     payload (big-packet write) or N req() calls each carrying one beat of
-//     data with is_first/is_last/burst_id set per beat (beat-form write). The
-//     slave responds per-req in either case.
+//     payload (big-packet-form write) or N req() calls each carrying one beat
+//     of data with is_first/is_last/burst_id set per beat (beat-form write).
+//
+// Write acknowledgement (AXI B-channel semantics — beat bindings only):
+//
+//   On a binding whose slave side speaks the beat protocol, a write burst is
+//   acknowledged once per BURST, not once per beat. The rule is keyed purely
+//   on is_last (a big-packet-form write is a one-beat burst and follows the
+//   last-beat rule). Non-beat bindings (big-packet / sync / single-req slave
+//   ports) keep the classic per-req round-trip.
+//
+//   - Non-last write beat (is_last == false):
+//       IO_REQ_GRANTED — the target takes ownership of the beat, consumes its
+//                        payload and eventually frees it (req->free()). It
+//                        NEVER calls resp() for this beat.
+//       IO_REQ_DENIED  — per-beat back-pressure, unchanged: the master keeps
+//                        the beat and re-sends it inside retry().
+//   - Last write beat (is_last == true):
+//       IO_REQ_DONE    — inline burst ack (the fast path): the burst's final
+//                        IO_RESP_OK/INVALID is set on the request, timing is
+//                        annotated via latency/duration, and the master KEEPS
+//                        its beat (ownership never transferred).
+//       IO_REQ_GRANTED — the target consumes and frees this beat too, and
+//                        later calls resp() exactly ONCE with a data-less,
+//                        allocator-backed ack object carrying the burst's
+//                        final status (see "The write ack" below).
+//       IO_REQ_DENIED  — back-pressure, unchanged.
+//
+//   - Atomic opcodes (LR/SC/SWAP/ADD/...) are exempt: they carry response
+//     data, so they keep the classic round-trip — the initiator's own request
+//     comes back via resp() and nobody else frees it. Targets must key the
+//     write rules on opcode == WRITE, not get_is_write() (which is true for
+//     every non-READ opcode).
+//   - Error escape hatch: a target may reject a malformed write beat (size
+//     over width, continuation without an open burst) inline with
+//     IO_REQ_DONE + IO_RESP_INVALID, regardless of is_last. The master keeps
+//     the beat and must treat the burst as aborted.
+//
+// The write ack:
+//
+//   - Allocated from the size-0 IoReqAllocator pool and prepare()'d by the
+//     producer. A producer that owns the burst's consumed size-0 last beat
+//     MAY recycle that very object as the ack (the initiator cannot tell —
+//     it must never correlate by object identity).
+//   - Fields: opcode WRITE; data == NULL (mandatory); is_first = is_last =
+//     true; burst_id = the id carried by the burst's beats (routers remap and
+//     restore it exactly as for read beats); initiator = copied from the
+//     beats — all beats of one burst MUST carry the same initiator; status =
+//     the burst's final IO_RESP_OK/INVALID (any beat error latches INVALID);
+//     addr/size SHOULD carry the burst base address / total byte count but
+//     are informational only — masters must not rely on them.
+//   - The ack is an ordinary response beat: it participates in IoRespAck
+//     response back-pressure (a consumer may return IO_RESP_DENIED; the
+//     producer holds the ack and re-sends it on resp_retry(IO_RETRY_WRITE)),
+//     and it may carry latency/duration annotations (read them with
+//     get_full_latency()).
+//   - The initiator consumes the final status and frees the ack
+//     (ack->free()).
+//
+// Write-beat ownership travels with the beat, BUFFER INCLUDED: GRANTED
+// transfers ownership to the callee, and the caller must not touch the beat
+// afterwards — snapshot any field you still need (size, is_last, addr)
+// BEFORE calling req(). The buffer behind data is valid exactly as long as
+// the beat is alive (not freed): once the initiator has passed a write beat
+// it can assume nothing about the buffer anymore — it must not touch, modify
+// or reuse it, and may only reclaim it after the burst's ack (the ack
+// implies every beat of the burst has been consumed and freed; a target must
+// not issue the ack before that). The current owner keeps the buffer usable
+// simply by holding the unfreed beat, and is free to pass the beat on to a
+// forwarder to keep the buffer alive without reallocation or copy. A
+// consumer must NOT free a write beat while it (or anything it handed out)
+// still references the payload — freeing the beat is what releases the
+// buffer. A mid-chain forwarder (beat router, clock bridge) passes the SAME
+// object downstream; the single component that terminates the beat frees it
+// once fully done with the payload. The burst's ack flows back through the
+// chain as a normal resp(), correlated by burst_id/initiator like a read
+// beat.
 //
 // Request allocation (beat protocol): any request that crosses a
 // consumer-frees boundary — a read burst request freed downstream, a read
-// response beat freed by the terminal master — must come from an
-// IoReqAllocator (see below) and be released with req->free(), never bare
-// new/delete. Allocators are shared per payload size (always a beat width,
-// or 0 for data-less requests) and recycle request + payload as one block,
-// removing the per-beat malloc/free round-trip. The rules that come with it:
+// response beat freed by the terminal master, a WRITE BEAT freed by the
+// target that consumes it, a write ack freed by the initiator — must come
+// from an IoReqAllocator (see below) and be released with req->free(), never
+// bare new/delete. Allocators are shared per payload size (always a beat
+// width, or 0 for data-less requests) and recycle request + payload as one
+// block, removing the per-beat malloc/free round-trip. The rules that come
+// with it:
 //
 //   - A read burst request carries no data (data == NULL). The producer of
 //     the response allocates each beat from its allocator; the beat's
@@ -84,12 +164,21 @@
 //     downstream, non-beat read request at that payload so the target fills
 //     it directly, without an extra copy). The terminal master copies each
 //     beat's payload into its destination buffer, then frees the beat.
-//   - Write beats are unchanged: they round-trip back to the master as acks,
-//     nobody else frees them, and their data may keep pointing into the
-//     master's own buffer.
-//   - The data pointer of an allocator-provided request must never be
-//     repointed, and alloc() reinitializes no field: callers set
-//     addr/size/opcode/is_first/is_last/burst_id per beat, as after new.
+//   - Write beats are allocated from the size-0 pool with data pointing into
+//     the initiator's source buffer — no per-beat payload copy. Buffer
+//     lifetime follows beat ownership (see "Write-beat ownership" above). A
+//     component that repacks write data anyway (e.g. the beat width adapter)
+//     may instead draw its downstream beats from a payload pool and copy;
+//     those beats are freed by the target like any other.
+//   - The data-pointer discipline is per pool kind: for payload pools
+//     (size > 0) req->data is the co-allocated payload, set once at block
+//     creation, and must never be repointed. For the size-0 pool req->data
+//     is CALLER-MANAGED: alloc() reinitializes nothing, so the caller must
+//     set data on EVERY allocation — NULL for data-less requests (read burst
+//     requests, write acks) or the source-buffer pointer for write beats.
+//     free() never touches data. As before, alloc() reinitializes no other
+//     field either: callers set addr/size/opcode/is_first/is_last/burst_id
+//     per beat, as after new.
 //   - Downstream requests to non-beat protocols (big-packet / sync /
 //     single-req) are never freed by the target; components keep reusing
 //     their own request objects there and may repoint their data (e.g. at a
@@ -328,12 +417,15 @@ class IoReq : public vp::QueueElem {
 };
 
 // Pooled allocator for beat-protocol requests. One shared allocator per
-// payload size (see get()); the payload is co-allocated with the request in a
-// single block and req->data is set once to it (NULL for a size-0 allocator)
-// and must never be repointed. Any component can return a request to its home
-// pool with req->free(), regardless of who allocated it — the request carries
-// a back-pointer to its allocator. Single-threaded by design, like the rest
-// of the engine core.
+// payload size (see get()). For payload pools (size > 0) the payload is
+// co-allocated with the request in a single block and req->data is set once
+// to it and must never be repointed. For the size-0 pool req->data is
+// caller-managed: set it on every allocation — NULL for data-less requests
+// (read burst requests, write acks) or the source-buffer pointer for write
+// beats; free() never touches it. Any component can return a request to its
+// home pool with req->free(), regardless of who allocated it — the request
+// carries a back-pointer to its allocator. Single-threaded by design, like
+// the rest of the engine core.
 class IoReqAllocator
 {
 public:
@@ -414,6 +506,12 @@ inline IoReqAllocator::~IoReqAllocator()
 
 inline void IoReq::free()
 {
+    // A request reaching free() without a home pool means an unported
+    // component sent a heap/embedded object across a consumer-frees boundary
+    // (e.g. a non-pooled write beat to a beat target) — fail loudly instead
+    // of corrupting a pool.
+    vp_assert(this->allocator != nullptr, (vp::Trace *)nullptr,
+        "IoReq::free() on a request without an allocator back-pointer\n");
     this->allocator->free(this);
 }
 
