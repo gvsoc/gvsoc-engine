@@ -9,7 +9,7 @@ target (a slave). Each ``vp::IoSlave`` port is bound to **exactly
 one** ``vp::IoMaster``; for fan-in, use one slave port per master
 plus a muxed slave declaration (see `Multiplexed ports`_).
 
-The protocol replaces v1 (:doc:`io_v1`) and changes four things:
+The protocol replaces v1 (:doc:`io_v1`) and changes five things:
 
 - **No request-argument stack.** v1's per-request ``args[16]`` /
   ``payload[64]`` slots are gone; models keep their state on the
@@ -21,42 +21,46 @@ The protocol replaces v1 (:doc:`io_v1`) and changes four things:
 - **DENIED uses a ``retry()`` handshake**, not per-request
   ``grant()``. The slave signals "I can accept again" once; the
   master is responsible for re-sending denied requests.
+- **The response path has its own back-pressure**, symmetric to the
+  request-path handshake (the AXI ``R``/``RREADY`` analogue). A
+  consumer's ``resp()`` callback can return ``IO_RESP_DENIED`` to
+  refuse a beat for the current cycle; the producer holds the beat and
+  re-sends it when the consumer signals readiness with
+  ``resp_retry()``. This lets a beat consumer throttle a response
+  stream (e.g. a router arbitrating many inputs down to one beat per
+  cycle) — see `Response-path back-pressure`_.
 - **Bursts are explicit.** ``is_first`` / ``is_last`` / ``burst_id``
   fields on every ``IoReq`` make multi-beat semantics first-class
-  on the wire, with three valid response forms (sync big-packet,
-  async big-packet, beat stream).
+  on the wire, with three valid response forms (sync whole-response,
+  async whole-response, beat stream).
 
 At a glance, the wiring between an initiator and a target looks like
 this:
 
 .. code-block:: text
 
-      Master component                            Slave component
-      ┌────────────────────┐                  ┌────────────────────┐
-      │                    │                  │                    │
-      │   vp::IoMaster ────┼──── binding ────►┼──── vp::IoSlave    │
-      │   out              │                  │   in               │
-      │                    │                  │                    │
-      └─┬────────────────▲─┘                  └─▲────────────────┬─┘
-        │                │                      │                │
-        │ out.req(req)   │                      │ req() handler  │
-        │   forward      │                      │ (slave logic)  │
-        │                │                      │                │
-        │                │ in.resp(req)         │                │
-        │                │   async response     │                │
-        │                ├──────────────────────┤                │
-        │                │                      │                │
-        │                │ in.retry()           │                │
-        │                │   "I can accept now" │                │
-        │                ├──────────────────────┤                │
-        │                │                      │                │
-        ▼                                                        ▼
+      Master component                          Slave component
+      ┌────────────────────┐                ┌────────────────────┐
+      │  vp::IoMaster out  │──── binding ──►│  vp::IoSlave in    │
+      └────────────────────┘                └────────────────────┘
+
+      request path
+        out.req(req)      ─────────────────►  req() handler (slave logic)
+        in.retry()        ◄─────────────────  "request input ready again"
+
+      response path
+        in.resp(req)      ◄─────────────────  async response / one beat
+        out.resp_retry()  ─────────────────►  "response input ready again"
 
 The master submits work with ``out.req(req)``; the slave processes
 the request and either replies inline (``IO_REQ_DONE``), accepts
 ownership and replies asynchronously later (``IO_REQ_GRANTED`` +
 ``in.resp(req)``), or refuses for now (``IO_REQ_DENIED`` +
-``in.retry()`` when ready).
+``in.retry()`` when ready). The response path is symmetric: the slave
+delivers each response with ``in.resp(req)``, the master's consumer may
+refuse a beat this cycle (``IO_RESP_DENIED``), and it signals
+``out.resp_retry()`` when it can accept again — the ``in.*`` calls run
+slave→master, the ``out.*`` calls master→slave.
 
 The IoReq object
 ----------------
@@ -139,16 +143,17 @@ the bus. Fields a master or slave usually touches:
      - ``uint64_t``
      - Scratch field; not reserved for a specific consumer.
 
-Ownership / mutation rules:
+Ownership / mutation rules. These are the parts common to **every**
+sub-protocol; what a ``resp()`` actually returns (the same object, or
+distinct pooled beats plus a per-burst ack) is plane-specific — see
+`Protocols and their rules`_ and `Write-beat ownership`_ below.
 
 - The **master owns** the request until ``req()`` returns
   ``IO_REQ_GRANTED``.
-- While ``GRANTED``, the **slave owns** the request. For reads,
-  atomics and non-beat-plane writes it must eventually call
-  ``in.resp(req)`` and ownership returns to the master. For a
-  **write beat on a beat binding**, GRANTED is a terminal ownership
-  transfer: the target consumes the beat and frees it
-  (``req->free()``); the beat itself never comes back (see
+- While ``GRANTED``, the **slave owns** the request; ownership returns to
+  the master when the slave responds (``in.resp(req)``). On the beat
+  plane a *write beat* is the exception: ``GRANTED`` is terminal — the
+  target consumes and frees it, and it never comes back (see
   `Write-beat ownership`_).
 - On ``IO_REQ_DONE``, ownership never leaves the master — the
   slave only mutates the object in-place during the call.
@@ -158,41 +163,6 @@ Ownership / mutation rules:
 A master reusing a request between sends should call
 ``req->prepare()`` to reset per-send fields (currently
 ``latency = 0``, ``duration = 0`` and ``status = IO_RESP_OK``).
-
-.. _Write-beat ownership:
-
-Write-beat ownership (beat plane)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-On bindings whose slave side speaks the beat protocol, write-beat
-ownership travels with the beat — **buffer included**:
-
-- ``GRANTED`` transfers ownership to the callee; the caller must not
-  touch the beat afterwards (snapshot any field you still need —
-  size, ``is_last``, addr — *before* calling ``req()``).
-- The buffer behind ``data`` is valid exactly as long as the beat is
-  alive (not freed). Once the initiator has passed a write beat it
-  can assume nothing about the buffer anymore — it must not touch,
-  modify or reuse it, and may only reclaim it after the burst's ack
-  (the ack implies every beat of the burst has been consumed and
-  freed; a target must not issue the ack before that).
-- The current owner keeps the buffer usable simply by holding the
-  unfreed beat, and is free to pass the beat on to a forwarder to
-  keep the buffer alive without reallocation or copy. A consumer
-  must **not** free a write beat while it (or anything it handed
-  out) still references the payload — freeing the beat is what
-  releases the buffer.
-- A mid-chain forwarder (beat router, clock bridge) passes the SAME
-  object downstream; the single component that terminates the beat
-  frees it once fully done with the payload. The burst's ack flows
-  back through the chain as a normal ``resp()``, correlated by
-  ``burst_id``/``initiator`` like a read beat.
-- **Atomics are exempt**: opcodes other than ``WRITE`` carry
-  response data, so they keep the classic round-trip — the
-  initiator's own request comes back via ``resp()`` and nobody else
-  frees it. Targets must key the write-beat rules on
-  ``opcode == vp::WRITE``, not ``get_is_write()`` (true for every
-  non-READ opcode).
 
 Ports
 -----
@@ -609,8 +579,157 @@ per cycle**, back-pressuring the losing output (its downstream
 one response beat to a master in the same cycle. The general and
 sync beat adapters are the reference producers.
 
+Protocols and their rules
+-------------------------
+
+A port never speaks "io_v2" in the abstract: it commits to one of three
+**sub-protocols**, declared by its Python signature (see `Signatures and
+the adapter framework`_ for how they are declared and auto-bridged). The
+flows shown so far — ``req()`` / ``resp()`` and the deny / back-pressure
+handshakes — are common to all three. What differs per protocol — who
+owns a request after ``GRANTED``, what a ``resp()`` delivers, who
+allocates and frees the objects, how timing is annotated — is collected in
+the three sub-sections below. At a glance:
+
+.. list-table:: Rules that depend on the plane
+   :header-rows: 1
+   :widths: 24 38 38
+
+   * - Rule
+     - Non-beat plane (Sync / SingleReq)
+     - Beat plane (``IoV2Beat``)
+   * - Ownership after ``GRANTED``
+     - The slave owns the request until it calls ``in.resp(req)`` with
+       **that same object**; ownership then returns to the master.
+     - Reads / atomics: the master's request round-trips (its read *data*,
+       though, arrives in separate beats). A **write beat**: ``GRANTED``
+       is terminal — the target consumes and **frees** the beat, which
+       never comes back. See `Write-beat ownership`_.
+   * - What ``resp()`` hands back
+     - The master's own request object, filled in place.
+     - Reads: *N* distinct allocator-backed beat objects correlated by
+       ``req->initiator`` (the master copies each out and frees it).
+       Writes: one data-less burst ack — or an inline ``DONE`` on the
+       last beat.
+   * - Allocation / freeing
+     - The master owns its request statically; no pools, no ``free()``.
+     - Read beats, write beats and acks come from a shared
+       ``IoReqAllocator`` and are released with ``req->free()``. See
+       `Pooled request allocation (IoReqAllocator)`_.
+   * - Write acknowledgement
+     - One ``resp()`` (or inline ``DONE``) per ``req()``.
+     - One ack per **burst**: non-last beats are consumed+freed silently;
+       the last beat answers inline ``DONE`` or a single data-less ack.
+       See `Write burst shapes`_.
+   * - Response forms a master must tolerate
+     - ``IoV2Sync``: inline ``DONE`` only. ``IoV2SingleReq``: one
+       single-beat response (inline / async / deny).
+     - One ``resp()`` per beat (the beat adapters normalise any slave form
+       into this).
+
+The three sub-protocols are detailed in turn below. ``IoV2Sync`` and
+``IoV2SingleReq`` share the same *non-beat* lifecycle — the master's own
+request round-trips and is statically owned — which is why the table above
+groups them in one column against the beat plane. When two bound ports
+declare different sub-protocols, the framework auto-inserts an adapter
+between them (see `Signatures and the adapter framework`_).
+
+IoV2Sync
+~~~~~~~~
+
+Always-inline. The slave answers every ``req()`` with ``IO_REQ_DONE``
+*inside* the call — it never uses ``resp()`` / ``retry()`` — and the reply
+rides back on the master's own request object. A master on this protocol
+can therefore drop all async bookkeeping: nothing is pooled, and nobody
+but the master ever owns or frees the request. The inline round-trip is
+the `Synchronous flow`_ shown earlier; ``memory_v3`` is the canonical sync
+slave. Because the reply is inline, timing is annotated on the request
+itself rather than deferred to a later ``resp()``:
+
+Latency annotation
+^^^^^^^^^^^^^^^^^^
+
+The timing cost of an inline transaction is carried in **two**
+fields, combined differently along the path from slave to master:
+
+- ``req->latency`` — **head latency** (pipeline / contention delay).
+  Components add to it with ``inc_latency(n)``, so it is **additive**
+  across series hops: each hop contributes its own.
+- ``req->duration`` — **bandwidth occupancy** (the time a resource is
+  busy streaming the packet, typically ``ceil(size / bandwidth)``).
+  Components set it with ``set_duration(n)``, which keeps the **max**,
+  not the sum. Two bandwidth routers in series each occupy their link
+  for ``duration`` cycles, but those occupations *overlap* (the bytes
+  pipeline through both), so the end-to-end transfer time is the
+  bottleneck — the max — not the total.
+
+A master reads the whole transaction cost via
+``req->get_full_latency()`` (``= latency + duration``) and stalls its
+pipeline accordingly (the ``IoV2BeatAdapter``, for instance, spreads
+beats so the last one lands at ``now + get_full_latency()``).
+``duration`` defaults to 0, so a request that never traverses a
+bandwidth-limited resource has ``get_full_latency() == get_latency()``
+— consumers that read only ``get_latency()`` keep working on those
+paths, but **any consumer downstream of a bandwidth router must read
+``get_full_latency()``** or it loses the transfer time. The reference
+bandwidth model is ``router_v2_bandwidth`` (``inc_latency(head)`` +
+``set_duration(burst)``); the beat and collapse adapters consume it
+with ``get_full_latency()``.
+
+For models that already use wall-clock scheduling (a
+``ClockEvent``-based deferred ``resp()``) the field can stay at 0
+— the delay is already baked into the cycle at which ``resp()``
+fires.
+
+This inline annotation is a **non-beat mechanism** — it belongs to
+``IoV2Sync`` and ``IoV2SingleReq``. On the beat plane (`IoV2Beat`_)
+timing is carried entirely by *when* each beat's ``resp()`` fires, not by
+these fields: a beat component never calls ``inc_latency`` /
+``set_duration`` on the beats it emits, so ``latency`` and ``duration``
+stay 0 on a pure beat path. The beat adapters do *read*
+``get_full_latency()``, but only to translate a value a non-beat
+bandwidth slave annotated on the far side into the correct beat pacing.
+
+A master reusing the same request object across submissions should
+call ``req->prepare()`` (or explicitly reset ``latency``) between
+sends.
+
+
+IoV2SingleReq
+~~~~~~~~~~~~~
+
+Single-word, identity-routed. One access yields exactly one **single-beat**
+response, in any of three shapes — inline ``IO_REQ_DONE``; async
+``IO_REQ_GRANTED`` + one ``resp()``; or ``IO_REQ_DENIED`` + ``retry()`` —
+always delivered on the **master's own request object** (it round-trips by
+identity). Components that correlate a response to its request by object
+identity — functional / bandwidth routers (``in_flight_map[req]``),
+width / opcode splitters (``req->parent``) — use this, which is exactly why
+they cannot consume a multi-beat stream. Like ``IoV2Sync`` the request is
+statically owned with no pools, and the inline `Latency annotation`_ above
+applies unchanged. An optional ``width`` bounds the access granule for a
+bank-interleaved fabric (see `Signatures and the adapter framework`_).
+
+IoV2Beat
+~~~~~~~~
+
+Beat-streamed. A transaction is streamed one beat per cycle; read responses
+and write beats are **distinct pooled objects** that cross a
+*consumer-frees* boundary, writes are acknowledged once per burst (AXI
+B-channel style), and every such object comes from an ``IoReqAllocator``
+pool and is released with ``req->free()``. The wire shapes, the write-beat
+ownership contract and the pooled allocator are detailed below.
+
+The beat plane does **not** use the inline ``latency`` / ``duration``
+annotation of the non-beat protocols (see `Latency annotation`_): beat
+timing *is* the pacing of ``resp()`` — at most one beat per cycle at the
+beat width — so beat components never set those fields. ``latency`` and
+``duration`` stay 0 on a pure beat path; a non-zero ``get_full_latency()``
+on a beat only ever comes through an adapter from a non-beat bandwidth
+slave, which the adapter converts back into pacing.
+
 Burst protocol
---------------
+^^^^^^^^^^^^^^
 
 Three fields make multi-beat transfers explicit:
 
@@ -621,7 +740,7 @@ Three fields make multi-beat transfers explicit:
   ``-1`` means "not part of a burst".
 
 Read burst shape (AXI-asymmetric)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+"""""""""""""""""""""""""""""""""
 
 A read burst is always submitted as **exactly one** ``req()`` with
 ``size = total_burst_bytes``, ``is_first = is_last = true``,
@@ -632,14 +751,14 @@ beats' own payloads (see `Pooled request allocation
 three forms below.
 
 The three response forms
-~~~~~~~~~~~~~~~~~~~~~~~~
+""""""""""""""""""""""""
 
 For any single ``req()`` the slave may pick:
 
-1. **Sync big-packet.** Fill ``req->data`` in place, set
+1. **Sync, whole response.** Fill ``req->data`` in place, set
    ``req->status``, return ``IO_REQ_DONE``. No later ``resp()``.
 
-2. **Async big-packet.** Return ``IO_REQ_GRANTED``, then call
+2. **Async, whole response.** Return ``IO_REQ_GRANTED``, then call
    ``in.resp(req)`` **once**, later, with the whole payload
    (``is_first = is_last = true``, ``size`` unchanged).
 
@@ -665,7 +784,7 @@ Diagrammatically, the three shapes look like this:
 
 .. code-block:: text
 
-   Form 1 — sync big-packet:
+   Form 1 — sync, whole response:
 
       master                                          slave
         │                                               │
@@ -676,7 +795,7 @@ Diagrammatically, the three shapes look like this:
         ▼                                               ▼
 
 
-   Form 2 — async big-packet:
+   Form 2 — async, whole response:
 
       master                                          slave
         │                                               │
@@ -706,14 +825,14 @@ Diagrammatically, the three shapes look like this:
 A master that needs uniform per-beat handling regardless of which
 form the slave picked just declares its outbound binding with
 ``signature=IoV2Beat(beat_width=W)``. The framework auto-inserts an
-``IoV2BeatAdapter`` between this master and any ``IoV2BigPacket`` /
-legacy-string ``'io_v2'`` slave; the master sees one normal
+``IoV2BeatAdapter`` between this master and a non-beat whole-response
+slave (a legacy-string ``'io_v2'`` slave); the master sees one normal
 ``resp()`` per beat with ``size``/``data``/``is_first``/``is_last``/
 ``burst_id``/``status`` mutated per beat. See
 `The beat adapter`_.
 
 Write burst shapes
-~~~~~~~~~~~~~~~~~~
+""""""""""""""""""
 
 Writes are master-driven (the master picks the wire shape) and
 come in two forms:
@@ -722,7 +841,7 @@ come in two forms:
   payload plus per-beat ``is_first`` / ``is_last`` / ``burst_id``.
   Useful when the master models per-beat write timing (typical AXI
   W channel).
-- **Big-packet** — one ``req()`` carrying the full burst data,
+- **Whole-burst** — one ``req()`` carrying the full burst data,
   ``is_first = is_last = true``. The slave consumes it atomically.
   On a beat binding this is simply a one-beat burst. Useful when
   the master doesn't need per-beat write semantics.
@@ -764,7 +883,7 @@ per ``req()``):
         ▼                                               ▼
 
 
-   Big-packet write (a one-beat burst on beat bindings):
+   Whole-burst write (a one-beat burst on beat bindings):
 
       master                                          slave
         │                                               │
@@ -774,7 +893,7 @@ per ``req()``):
         ▼                                               ▼
 
 The cumulative-size invariant
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+"""""""""""""""""""""""""""""
 
 For **reads** (and atomics), across every response that a single
 submitted ``req()`` produces (whether one or N), the **sum** of
@@ -792,12 +911,12 @@ by the ack is informational only; masters retire the burst on the
 ack (or on the inline ``DONE`` of the last beat).
 
 Slave skeletons for the three response forms
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+""""""""""""""""""""""""""""""""""""""""""""
 
-**Sync big-packet** (matches the simple synchronous flow above —
+**Sync, whole response** (matches the simple synchronous flow above —
 just fill the whole buffer and return ``IO_REQ_DONE``).
 
-**Async big-packet** — same as the async flow above, just with
+**Async, whole response** — same as the async flow above, just with
 ``req->size`` covering the full burst:
 
 .. code-block:: cpp
@@ -832,7 +951,7 @@ just fill the whole buffer and return ``IO_REQ_DONE``).
     }
 
 Master-side consumer
-~~~~~~~~~~~~~~~~~~~~
+""""""""""""""""""""
 
 A master must tolerate all three forms. The typical pattern: on
 each response, accumulate the bytes against an expected total and
@@ -868,8 +987,45 @@ an ``IoV2BeatAdapter`` that normalises whatever response form the
 slave produced into a uniform per-beat ``resp()`` at cycle-accurate
 spacing. See `The beat adapter`_.
 
+
+.. _Write-beat ownership:
+
+Write-beat ownership (beat plane)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+On bindings whose slave side speaks the beat protocol, write-beat
+ownership travels with the beat — **buffer included**:
+
+- ``GRANTED`` transfers ownership to the callee; the caller must not
+  touch the beat afterwards (snapshot any field you still need —
+  size, ``is_last``, addr — *before* calling ``req()``).
+- The buffer behind ``data`` is valid exactly as long as the beat is
+  alive (not freed). Once the initiator has passed a write beat it
+  can assume nothing about the buffer anymore — it must not touch,
+  modify or reuse it, and may only reclaim it after the burst's ack
+  (the ack implies every beat of the burst has been consumed and
+  freed; a target must not issue the ack before that).
+- The current owner keeps the buffer usable simply by holding the
+  unfreed beat, and is free to pass the beat on to a forwarder to
+  keep the buffer alive without reallocation or copy. A consumer
+  must **not** free a write beat while it (or anything it handed
+  out) still references the payload — freeing the beat is what
+  releases the buffer.
+- A mid-chain forwarder (beat router, clock bridge) passes the SAME
+  object downstream; the single component that terminates the beat
+  frees it once fully done with the payload. The burst's ack flows
+  back through the chain as a normal ``resp()``, correlated by
+  ``burst_id``/``initiator`` like a read beat.
+- **Atomics are exempt**: opcodes other than ``WRITE`` carry
+  response data, so they keep the classic round-trip — the
+  initiator's own request comes back via ``resp()`` and nobody else
+  frees it. Targets must key the write-beat rules on
+  ``opcode == vp::WRITE``, not ``get_is_write()`` (true for every
+  non-READ opcode).
+
+
 Pooled request allocation (IoReqAllocator)
-------------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 On the beat protocol, requests and response beats routinely cross a
 boundary where the **consumer frees an object the producer allocated**
@@ -918,61 +1074,18 @@ The rules that come with it (also stated in the header):
   beats from a payload pool and copy. The burst's **ack** is a size-0
   pool object too (a producer may recycle the burst's consumed size-0
   last beat as the ack); the initiator frees it.
-- **Downstream requests to non-beat protocols** (big-packet / sync /
-  single-req) are never freed by the target; components keep reusing
-  their own request objects there and may repoint their ``data`` (e.g. at
-  a response beat's payload).
+- **Downstream requests to non-beat protocols** (sync / single-req) are
+  never freed by the target; components keep reusing their own request
+  objects there and may repoint their ``data`` (e.g. at a response beat's
+  payload).
 - **Never bare ``new`` / ``delete``** for anything that crosses a
   consumer-frees boundary — always ``IoReqAllocator`` + ``req->free()``.
 
-Non-beat bindings are untouched: big-packet requests there stay
-statically allocated on their master, carry data both directions, and
-round-trip. (A big-packet-form *write* submitted on a beat binding is a
-one-beat burst and follows the write-beat pool rules above.)
+Non-beat bindings are untouched: their requests stay statically allocated
+on their master, carry data both directions, and round-trip. (A
+whole-burst *write* submitted on a beat binding is a one-beat burst and
+follows the write-beat pool rules above.)
 
-Latency annotation
-------------------
-
-The timing cost of an inline transaction is carried in **two**
-fields, combined differently along the path from slave to master:
-
-- ``req->latency`` — **head latency** (pipeline / contention delay).
-  Components add to it with ``inc_latency(n)``, so it is **additive**
-  across series hops: each hop contributes its own.
-- ``req->duration`` — **bandwidth occupancy** (the time a resource is
-  busy streaming the packet, typically ``ceil(size / bandwidth)``).
-  Components set it with ``set_duration(n)``, which keeps the **max**,
-  not the sum. Two bandwidth routers in series each occupy their link
-  for ``duration`` cycles, but those occupations *overlap* (the bytes
-  pipeline through both), so the end-to-end transfer time is the
-  bottleneck — the max — not the total.
-
-A master reads the whole transaction cost via
-``req->get_full_latency()`` (``= latency + duration``) and stalls its
-pipeline accordingly (the ``IoV2BeatAdapter``, for instance, spreads
-beats so the last one lands at ``now + get_full_latency()``).
-``duration`` defaults to 0, so a request that never traverses a
-bandwidth-limited resource has ``get_full_latency() == get_latency()``
-— consumers that read only ``get_latency()`` keep working on those
-paths, but **any consumer downstream of a bandwidth router must read
-``get_full_latency()``** or it loses the transfer time. The reference
-bandwidth model is ``router_v2_bandwidth`` (``inc_latency(head)`` +
-``set_duration(burst)``); the beat and collapse adapters consume it
-with ``get_full_latency()``.
-
-For models that already use wall-clock scheduling (a
-``ClockEvent``-based deferred ``resp()``) the field can stay at 0
-— the delay is already baked into the cycle at which ``resp()``
-fires.
-
-For beat-stream responses the slave can set the per-beat
-``latency`` to give the master an earliest-ready offset for each
-beat (in addition to the natural pacing of when ``resp()`` is
-called).
-
-A master reusing the same request object across submissions should
-call ``req->prepare()`` (or explicitly reset ``latency``) between
-sends.
 
 Signatures and the adapter framework
 ------------------------------------
@@ -980,8 +1093,19 @@ Signatures and the adapter framework
 Every binding carries a **signature** on each side declaring which slice
 of the protocol that port speaks. When the two sides differ, the binding
 pass asks the *master* signature's ``bridge_to()`` to insert an adapter;
-the slave side never triggers insertion. Four signatures exist
+the slave side never triggers insertion. Three signatures exist
 (``gvsoc/engine/python/gvsoc/signature.py``):
+
+.. note::
+
+   Every port must declare a **concrete** sub-protocol (``IoV2Sync`` /
+   ``IoV2SingleReq`` / ``IoV2Beat``); there is deliberately **no**
+   transparent / "any" io_v2 signature. The bridge pass compares
+   signatures hop by hop (never end to end), so a transparent port would
+   hide the real endpoints' protocols from its neighbours and let a wrong
+   or missing adapter through silently — protocol-transparent forwarders
+   (remapper, clock bridge) instead take a concrete signature *per
+   instance*, committing each to the plane it sits on.
 
 .. list-table::
    :header-rows: 1
@@ -990,11 +1114,6 @@ the slave side never triggers insertion. Four signatures exist
    * - Signature
      - Contract / when to use
      - Bridge inserted
-   * - ``IoV2BigPacket`` (also the legacy ``'io_v2'`` string)
-     - The general case: the slave may answer in any of the three forms
-       (sync ``DONE``, async big-packet, beat stream) and the master must
-       tolerate all of them.
-     - vs a beat slave → ``IoV2BeatCollapseAdapter``
    * - ``IoV2Sync``
      - Strict inline sub-protocol: the slave **always** returns
        ``IO_REQ_DONE`` and never calls ``resp()`` / ``retry()``, letting a
@@ -1025,8 +1144,8 @@ the slave side never triggers insertion. Four signatures exist
        adapter (the wider width must be an integer multiple of the
        narrower one).
      - vs an ``IoV2Sync`` slave → ``IoV2BeatToSyncAdapter``; vs an
-       ``IoV2SingleReq`` slave → ``IoV2BeatToSingleReqAdapter``; vs an
-       ``IoV2BigPacket`` / legacy slave → ``IoV2BeatAdapter``; vs an
+       ``IoV2SingleReq`` slave → ``IoV2BeatToSingleReqAdapter``; vs a
+       legacy ``'io_v2'`` whole-response slave → ``IoV2BeatAdapter``; vs an
        ``IoV2Beat`` slave of a different width →
        ``IoV2BeatWidthAdapter``
 
@@ -1045,7 +1164,7 @@ between the master and the slave whenever the slave's signature is
 non-beat: ``IoV2BeatToSyncAdapter`` for an ``IoV2Sync`` slave (the
 specialised inline case, below), ``IoV2BeatToSingleReqAdapter`` for an
 ``IoV2SingleReq`` slave (the per-combination case, below) and the general
-``IoV2BeatAdapter`` for ``IoV2BigPacket`` / the legacy ``'io_v2'`` string.
+``IoV2BeatAdapter`` for a legacy ``'io_v2'`` (whole-response) string slave.
 Either way the master sees a normal ``IoMaster``-shaped flow with one
 ``resp()`` per beat:
 
@@ -1056,7 +1175,7 @@ Either way the master sees a normal ``IoMaster``-shaped flow with one
     class MyDma(st.Component):
         def o_AXI(self, slave_itf):
             # Framework auto-inserts utils.io_v2_beat_adapter when the
-            # bound slave is IoV2BigPacket (or legacy 'io_v2').
+            # bound slave is a whole-response slave (legacy 'io_v2').
             self.itf_bind('axi', slave_itf,
                           signature=IoV2Beat(beat_width=64))
 
@@ -1185,11 +1304,12 @@ The collapse adapter
 ~~~~~~~~~~~~~~~~~~~~~
 
 ``IoV2BeatCollapseAdapter`` is the inverse: it makes a beat-streaming
-slave (e.g. a ``KIND_BEAT`` router) look like a plain big-packet slave to
-an ``IoV2BigPacket`` master (a single-req master gets the dedicated
+slave (e.g. a ``KIND_BEAT`` router) look like a plain whole-response
+slave to a non-beat master that round-trips its own request object and
+expects a single whole reply (a single-req master gets the dedicated
 ``IoV2SingleReqToBeatAdapter`` below instead). The binding pass inserts
-it whenever such a master binds a beat slave — so a big-packet master
-never sees a raw beat stream it cannot handle. Source:
+it whenever such a master binds a beat slave — so the master never sees a
+raw beat stream it cannot handle. Source:
 ``gvsoc/core/models/utils/io_v2_beat_collapse_adapter.cpp``.
 
 It keeps the classic round-trip on the master side (the master owns its
@@ -1203,7 +1323,7 @@ data-less, distinct — comes back and the adapter frees it after latching
 the status onto the master's reply). It consumes the *N* allocator-backed
 read response beats, copies each payload into the master's buffer at the
 running offset, frees the beats (``req->free()``), then returns the
-master's own request as one big-packet reply on the last beat. It is
+master's own request as one whole reply on the last beat. It is
 **single-outstanding**: a second master access while one is in flight is
 ``DENIED`` and retried — so only place it behind a single-outstanding
 master (an in-order core, a single-refill i-cache).
@@ -1451,11 +1571,12 @@ Model requirements
 The hard contracts a model must honour to be correct on a v2 path. Each is
 backed by code referenced in *See also*.
 
-1. **Tolerate every response form your signature admits.** An
-   ``IoV2BigPacket`` master must handle all three forms (sync ``DONE``,
-   async big-packet, beat stream). Narrow the signature
-   (``IoV2Sync`` / ``IoV2SingleReq`` / ``IoV2Beat``) to legitimately
-   restrict what you must handle — don't assume a form.
+1. **Tolerate every response form your signature admits.** Pick the
+   signature (``IoV2Sync`` / ``IoV2SingleReq`` / ``IoV2Beat``) that
+   legitimately restricts what you must handle, and then handle all of it
+   — an ``IoV2Sync`` master only ever sees inline ``DONE``, but an
+   ``IoV2SingleReq`` master must accept inline / async / deny — don't
+   assume a narrower form than your signature admits.
 2. **Allocate through ``IoReqAllocator`` on the beat protocol.** Any
    request that crosses a consumer-frees boundary (a read burst request,
    a read response beat, a write beat, a write ack) comes from a shared
@@ -1488,8 +1609,9 @@ backed by code referenced in *See also*.
    them; ack exactly once per burst.
 6. **Choose the signature deliberately.** ``IoV2Sync`` for inline-only
    slaves; ``IoV2SingleReq`` for single-word, identity-routed routers and
-   splitters; ``IoV2Beat`` for cycle-accurate per-beat consumers;
-   ``IoV2BigPacket`` for the general case.
+   splitters; ``IoV2Beat`` for cycle-accurate per-beat consumers. Every
+   port must commit to one of these concrete sub-protocols (see the note
+   under `Signatures and the adapter framework`_).
 7. **Beat routers: preserve the master's ``is_last`` and size the burst
    budget.** A downstream beat adapter overwrites ``req->is_last`` per beat,
    so snapshot the master's value at forward time. Pick a shared
@@ -1520,7 +1642,8 @@ explicitly.
   bandwidth wait, so a path that should stream at 8 B/cyc streamed at 4.
   *Rule: pace sub-read issuance to one per cycle and size the outstanding
   window ≥ the downstream round-trip* (the adapter does this). The
-  complementary fix on the **big-packet** path is the ``duration`` field:
+  complementary fix on the **non-beat (whole-transaction)** path is the
+  ``duration`` field:
   ``router_v2_bandwidth`` reports its bandwidth cost via ``set_duration``
   (max-combined), so two series routers report the bottleneck transfer
   time, not the sum. Consumers must read ``get_full_latency()``, not
@@ -1566,8 +1689,7 @@ See also
   declares ``signature=IoV2Beat(...)`` and whose slave is non-beat).
 - The inverse collapse adapter:
   ``gvsoc/core/models/utils/io_v2_beat_collapse_adapter.{cpp,py}``
-  (inserted when an ``IoV2BigPacket`` / ``IoV2SingleReq`` master binds a
-  beat slave).
+  (inserted when a non-beat whole-response master binds a beat slave).
 - Real heap-alloc/free masters to copy: the cluster DMA
   ``gvsoc/gap9/models/ips/gap/cluster/mchan_beat.cpp`` and the iDMA
   ``gvsoc/pulp/models/pulp/ips/pulp/idma_v2/be/idma_be_axi.cpp``.
