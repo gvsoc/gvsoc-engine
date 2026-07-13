@@ -26,13 +26,15 @@
 #include "vp/time/time_engine.hpp"
 #include "vp/stats/stats_engine.hpp"
 #include "vp/memcheck.hpp"
+#include "vp/runtime_config.hpp"
 
 namespace vp {
 
   class Top
   {
   public:
-      Top(std::string config_path, bool is_async, gv::Controller *launcher);
+      Top(std::string config_path, std::string runtime_config_path, bool is_async,
+          gv::Controller *launcher);
       ~Top();
 
       Component *top_instance;
@@ -53,6 +55,7 @@ namespace vp {
       vp::PowerEngine *power_engine;
       vp::StatsEngine *stats_engine;
       vp::MemCheck *memcheck;
+      vp::RuntimeConfig *runtime_config;
   };
 
 };

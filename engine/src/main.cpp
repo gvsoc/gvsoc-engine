@@ -34,6 +34,7 @@
 int main(int argc, char *argv[])
 {
     char *config_path = NULL;
+    char *runtime_config_path = NULL;
     bool open_proxy = false;
 
     for (int i=1; i<argc; i++)
@@ -41,6 +42,10 @@ int main(int argc, char *argv[])
         if (strncmp(argv[i], "--config=", 9) == 0)
         {
             config_path = &argv[i][9];
+        }
+        else if (strncmp(argv[i], "--runtime-config=", 17) == 0)
+        {
+            runtime_config_path = &argv[i][17];
         }
         else if (strcmp(argv[i], "--proxy") == 0)
         {
@@ -65,6 +70,10 @@ int main(int argc, char *argv[])
 #endif
 
     gv::GvsocConf conf = { .config_path=config_path };
+    if (runtime_config_path != NULL)
+    {
+        conf.runtime_config_path = runtime_config_path;
+    }
     gv::Gvsoc *gvsoc = gv::gvsoc_new(&conf);
     gvsoc->open();
 

@@ -25,7 +25,8 @@
 #include <vp/component_tree.hpp>
 #include "vp/top.hpp"
 
-vp::Top::Top(std::string config_path, bool is_async, gv::Controller *launcher)
+vp::Top::Top(std::string config_path, std::string runtime_config_path, bool is_async,
+    gv::Controller *launcher)
 {
     js::Config *js_config = js::import_config_from_file(config_path);
     if (js_config == NULL)
@@ -34,6 +35,24 @@ vp::Top::Top(std::string config_path, bool is_async, gv::Controller *launcher)
     }
 
     this->gv_config = js_config->get("target/gvsoc");
+
+    // Load the per-run runtime config values, overlaid onto the compiled
+    // tree configs at component construction. Launchers which do not forward
+    // the --runtime-config option (e.g. the GUI) get the path from the
+    // gvsoc config instead.
+    if (runtime_config_path == "")
+    {
+        js::Config *runtime_config_cfg = this->gv_config->get("runtime_config");
+        if (runtime_config_cfg != nullptr)
+        {
+            runtime_config_path = runtime_config_cfg->get_str();
+        }
+    }
+    this->runtime_config = new vp::RuntimeConfig();
+    if (runtime_config_path != "")
+    {
+        this->runtime_config->load(runtime_config_path);
+    }
 
     // Load the per-target compiled tree if available
     const vp::ComponentTreeNode *platform_tree = nullptr;
@@ -60,7 +79,15 @@ vp::Top::Top(std::string config_path, bool is_async, gv::Controller *launcher)
 
     this->top_instance = vp::Component::load_component(js_config->get("**/target"), this->gv_config,
         NULL, "", this->time_engine, this->trace_engine, this->power_engine, this->memcheck,
-        platform_tree, this->stats_engine);
+        platform_tree, this->stats_engine, this->runtime_config);
+
+    // The whole tree is built, any leftover runtime config key is a typo or
+    // a stale file. Only checked when the compiled tree was used: the JSON
+    // instantiation fallback has no runtime descriptors and consumes nothing.
+    if (platform_tree != nullptr)
+    {
+        this->runtime_config->check_all_consumed();
+    }
 
     power_engine->init(this->top_instance);
     trace_engine->init(this->top_instance);
@@ -82,6 +109,7 @@ void vp::Top::start()
 
 vp::Top::~Top()
 {
+    delete this->runtime_config;
     delete this->stats_engine;
     delete this->power_engine;
     delete this->trace_engine;

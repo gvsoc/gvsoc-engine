@@ -36,6 +36,36 @@ from gvsoc.signature import Signature
 generated_components = {}
 
 
+def _runtime_value_str(value, cpp_type: str) -> str:
+    """Format one runtime config value in the canonical text form the engine
+    parses back (see vp::RuntimeConfig)."""
+    if cpp_type == 'bool':
+        return 'true' if value else 'false'
+    if cpp_type == 'int64_t':
+        return str(int(value))
+    if cpp_type == 'double':
+        return repr(float(value))
+    text = str(value)
+    if '\n' in text:
+        raise ValueError(f'Runtime config string values cannot contain newlines: {text!r}')
+    return text
+
+
+def dump_runtime_config(component, file_path: str):
+    """Write the per-run runtime config key/value file for the given systree.
+
+    The file carries the values of all ``Annotated[T, Runtime]`` config
+    fields, keyed by ``<component path>/<field>``. It is regenerated at every
+    run and read by the engine (--runtime-config), which overlays the values
+    onto the compiled tree config structs at component construction.
+    """
+    lines = []
+    component._dump_runtime_fields(lines)
+    with open(file_path, 'w', encoding='utf-8') as file_desc:
+        for line in lines:
+            file_desc.write(line + '\n')
+
+
 def _signatures_match(master_sig, slave_sig):
     """Bind-time compatibility check between two signatures.
 
@@ -657,33 +687,46 @@ class Component(gvrun.target.SystemTreeNode):
 
         return result
 
-    def _sync_runtime_fields_to_properties(self):
-        """Copy current values of ``Annotated[T, Runtime]`` fields from the
-        attached Config instance into ``self.properties`` so they flow
-        through the JSON wire. The engine's Component constructor then
-        overlays them onto the typed config struct at construction time.
+    def _dump_runtime_fields(self, lines: list):
+        """Append the runtime config lines of this component and its whole
+        sub-hierarchy to ``lines``.
 
-        Existing properties win — an explicit ``add_property`` call from
-        the generator takes precedence over the Config field value.
+        One ``<component path>/<field>=<value>`` line per
+        ``Annotated[T, Runtime]`` config field; a list field's own key
+        carries the element count and each element follows as
+        ``<component path>/<field>/<index>/<subfield>=<value>``. The engine
+        overlays these values onto the compiled tree configs at component
+        construction, so runtime values never enter the compiled tree nor
+        its signature.
         """
-        from typing import get_type_hints
         config = getattr(self, '_component_config', None)
-        if config is None or not is_dataclass(config):
-            return
-        try:
-            type_hints = get_type_hints(type(config), include_extras=True)
-        except Exception:
-            type_hints = {}
-        for f in fields(config):
-            resolved = type_hints.get(f.name, f.type)
-            if not is_runtime_annotation(resolved):
-                continue
-            if f.name in self.properties:
-                continue
-            value = getattr(config, f.name, None)
-            if value is None:
-                continue
-            self.properties[f.name] = value
+        if config is not None and is_dataclass(config):
+            from gvrun.config_gen import get_config_fields
+            path = self.get_path()
+            prefix = f'{path}/' if path != '' else ''
+            for fld in get_config_fields(type(config)):
+                if not fld['runtime']:
+                    continue
+                value = getattr(config, fld['name'], None)
+                if value is None:
+                    continue
+                key = f'{prefix}{fld["name"]}'
+                if fld['cpp_type'] == 'list':
+                    lines.append(f'{key}={len(value)}')
+                    elem_fields = [f for f in get_config_fields(fld['list_elem_cls'])
+                        if f['cpp_type'] != 'list']
+                    for index, elem in enumerate(value):
+                        for elem_fld in elem_fields:
+                            elem_value = getattr(elem, elem_fld['name'], None)
+                            if elem_value is None:
+                                continue
+                            lines.append(f'{key}/{index}/{elem_fld["name"]}='
+                                f'{_runtime_value_str(elem_value, elem_fld["cpp_type"])}')
+                else:
+                    lines.append(f'{key}={_runtime_value_str(value, fld["cpp_type"])}')
+
+        for child in self.components.values():
+            child._dump_runtime_fields(lines)
 
     def get_config(self):
         """Return the typed config dataclass attached to this component.
@@ -712,8 +755,6 @@ class Component(gvrun.target.SystemTreeNode):
 
         if not self.finalize_done:
             self.__finalize()
-
-        self._sync_runtime_fields_to_properties()
 
         config = {}
 

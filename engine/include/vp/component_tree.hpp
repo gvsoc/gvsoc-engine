@@ -39,7 +39,7 @@ struct TreeBinding
 };
 
 /**
- * @brief Scalar type of a runtime-settable config field.
+ * @brief Type of a runtime-settable config field.
  */
 enum RuntimeFieldType
 {
@@ -47,6 +47,7 @@ enum RuntimeFieldType
     RUNTIME_BOOL,
     RUNTIME_INT64,
     RUNTIME_DOUBLE,
+    RUNTIME_LIST,
 };
 
 /**
@@ -54,14 +55,23 @@ enum RuntimeFieldType
  *
  * Generated at compile time from fields marked ``Annotated[T, Runtime]``.
  * At component construction, the engine uses this table to overlay the
- * field's value from the JSON property wire onto the component's typed
- * config struct.
+ * field's value from the per-run runtime config file onto the component's
+ * typed config struct (see vp::RuntimeConfig).
+ *
+ * For RUNTIME_LIST fields, ``offset`` is the offset of the ``<name>_count``
+ * member, ``ptr_offset`` the offset of the element array pointer, and
+ * ``elem_fields`` describes the fields of one element struct (scalars and
+ * strings only). The list members are left zero for scalar fields.
  */
 struct RuntimeField
 {
-    const char *name;           // Property name (matches JSON key)
-    unsigned int offset;        // Offset of the field inside the config struct
-    RuntimeFieldType type;      // Scalar type for the overlay
+    const char *name;               // Field name (last element of the runtime config key)
+    unsigned int offset;            // Offset of the field (or list count) inside the config struct
+    RuntimeFieldType type;          // Type of the overlay
+    unsigned int ptr_offset = 0;    // For lists: offset of the element array pointer
+    unsigned int elem_size = 0;     // For lists: size of one element struct
+    const RuntimeField *elem_fields = nullptr; // For lists: element field descriptors
+    int num_elem_fields = 0;        // For lists: number of element field descriptors
 };
 
 /**

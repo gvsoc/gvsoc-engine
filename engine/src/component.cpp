@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <vp/vp.hpp>
 #include <vp/component_tree.hpp>
+#include <vp/runtime_config.hpp>
 #include <stdio.h>
 #include "string.h"
 #include <string>
@@ -284,7 +285,8 @@ std::string vp::Component::get_module_path(js::Config *gv_config, std::string re
 vp::Component *vp::Component::load_component(js::Config *config, js::Config *gv_config,
     vp::Component *parent, std::string name, vp::TimeEngine *time_engine,
     vp::TraceEngine *trace_engine, vp::PowerEngine *power_engine, vp::MemCheck *memcheck,
-    const vp::ComponentTreeNode *tree_node, vp::StatsEngine *stats_engine)
+    const vp::ComponentTreeNode *tree_node, vp::StatsEngine *stats_engine,
+    vp::RuntimeConfig *runtime_config)
 {
     std::string module_name = config->get_child_str("vp_component");
 
@@ -357,7 +359,7 @@ vp::Component *vp::Component::load_component(js::Config *config, js::Config *gv_
     if (gv_new)
     {
         ComponentConf conf(name, parent, config, gv_config, time_engine, trace_engine,
-            power_engine, memcheck, tree_node, stats_engine);
+            power_engine, memcheck, tree_node, stats_engine, runtime_config);
         return gv_new(conf);
     }
 
@@ -403,53 +405,106 @@ vp::Component *vp::Component::new_component(std::string name, js::Config *config
 {
     vp::Component *instance = vp::Component::load_component(config, this->gv_config, this, name,
         this->time.get_engine(), this->traces.get_trace_engine(), this->power.get_engine(), this->memcheck,
-        child_tree_node, this->stats.get_engine());
+        child_tree_node, this->stats.get_engine(), this->runtime_config);
 
     this->get_trace()->msg(vp::Trace::LEVEL_DEBUG, "New component (name: %s)\n", name.c_str());
 
     return instance;
 }
 
+void vp::Component::apply_runtime_field(char *base, const vp::RuntimeField &field,
+    const std::string &value)
+{
+    void *slot = base + field.offset;
+    switch (field.type)
+    {
+        case vp::RUNTIME_STRING:
+            *reinterpret_cast<const char **>(slot) = strdup(value.c_str());
+            break;
+        case vp::RUNTIME_BOOL:
+            *reinterpret_cast<bool *>(slot) = vp::RuntimeConfig::to_bool(value);
+            break;
+        case vp::RUNTIME_INT64:
+            *reinterpret_cast<int64_t *>(slot) = vp::RuntimeConfig::to_int64(value);
+            break;
+        case vp::RUNTIME_DOUBLE:
+            *reinterpret_cast<double *>(slot) = vp::RuntimeConfig::to_double(value);
+            break;
+        case vp::RUNTIME_LIST:
+            // Lists are handled by the caller
+            break;
+    }
+}
+
 void vp::Component::apply_runtime_overrides(void *cfg)
 {
-    if (this->tree_node == nullptr || this->tree_node->runtime_fields == nullptr)
+    if (this->tree_node == nullptr || this->tree_node->runtime_fields == nullptr ||
+        this->runtime_config == nullptr)
     {
         return;
     }
 
     const vp::RuntimeField *table = this->tree_node->runtime_fields;
     int n = this->tree_node->num_runtime_fields;
-    js::Config *js = this->get_js_config();
     char *base = static_cast<char *>(cfg);
+
+    // Keys are the component path without the leading '/', followed by the
+    // field name, matching what gvrun dumps at each invocation
+    std::string prefix = this->get_path();
+    if (!prefix.empty() && prefix[0] == '/')
+    {
+        prefix = prefix.substr(1);
+    }
+    if (!prefix.empty())
+    {
+        prefix += '/';
+    }
 
     for (int i = 0; i < n; i++)
     {
         const vp::RuntimeField &f = table[i];
-        js::Config *node = (js != nullptr) ? js->get(f.name) : nullptr;
-        if (node == nullptr)
-        {
-            continue;
-        }
+        std::string key = prefix + f.name;
 
-        void *slot = base + f.offset;
-        switch (f.type)
+        if (f.type == vp::RUNTIME_LIST)
         {
-            case vp::RUNTIME_STRING:
+            // The list's own key carries the element count, each element
+            // field follows as <key>/<index>/<subfield>. An absent count
+            // leaves the baked default untouched; an absent element field
+            // leaves the element bytes zeroed.
+            const std::string *count_value = this->runtime_config->get(key);
+            if (count_value == nullptr)
             {
-                std::string s = node->get_str();
-                *reinterpret_cast<const char **>(slot) = strdup(s.c_str());
-                break;
+                continue;
             }
-            case vp::RUNTIME_BOOL:
-                *reinterpret_cast<bool *>(slot) = node->get_bool();
-                break;
-            case vp::RUNTIME_INT64:
-                *reinterpret_cast<int64_t *>(slot) =
-                    static_cast<int64_t>(node->get_int());
-                break;
-            case vp::RUNTIME_DOUBLE:
-                *reinterpret_cast<double *>(slot) = node->get_double();
-                break;
+
+            int64_t count = vp::RuntimeConfig::to_int64(*count_value);
+            char *elems = count > 0 ? (char *)calloc(count, f.elem_size) : nullptr;
+            for (int64_t j = 0; j < count; j++)
+            {
+                std::string elem_key = key + '/' + std::to_string(j) + '/';
+                for (int k = 0; k < f.num_elem_fields; k++)
+                {
+                    const vp::RuntimeField &elem_field = f.elem_fields[k];
+                    const std::string *value =
+                        this->runtime_config->get(elem_key + elem_field.name);
+                    if (value != nullptr)
+                    {
+                        vp::Component::apply_runtime_field(elems + j * f.elem_size,
+                            elem_field, *value);
+                    }
+                }
+            }
+
+            *reinterpret_cast<size_t *>(base + f.offset) = count;
+            *reinterpret_cast<const void **>(base + f.ptr_offset) = elems;
+        }
+        else
+        {
+            const std::string *value = this->runtime_config->get(key);
+            if (value != nullptr)
+            {
+                vp::Component::apply_runtime_field(base, f, *value);
+            }
         }
     }
 }
@@ -466,6 +521,7 @@ vp::Component::Component(vp::ComponentConf &config)
     this->parent = config.parent;
     this->gv_config = config.gv_config;
     this->tree_node = config.tree_node;
+    this->runtime_config = config.runtime_config;
 
     // Assign typed config from the compiled tree
     if (this->tree_node != nullptr)

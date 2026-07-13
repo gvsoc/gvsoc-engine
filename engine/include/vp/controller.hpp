@@ -237,6 +237,8 @@ namespace gv {
         // configuration at init time since the GvsocConf object belongs to the caller and may
         // not outlive init(). Used to instantiate the system again on restart.
         std::string config_path;
+        // Path of the per-run runtime config values file, copied like config_path
+        std::string runtime_config_path;
         // Top model class containing all engines
         vp::Top *handler;
         // Simulation retval set when simulation terminates

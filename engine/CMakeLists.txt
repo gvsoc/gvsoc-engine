@@ -18,6 +18,7 @@ set(GVSOC_ENGINE_CXX_SRCS
     "src/memcheck.cpp"
     "src/jsmn.cpp"
     "src/json.cpp"
+    "src/runtime_config.cpp"
     "src/trace/event.cpp"
     "src/trace/trace.cpp"
     "src/trace/vcd.cpp"

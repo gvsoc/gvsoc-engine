@@ -584,6 +584,18 @@ class Runner():
             if target_config is not None:
                 _strip_tree_data(target_config)
 
+        # Dump the per-run runtime config values (Runtime-annotated config
+        # fields). The engine overlays them onto the compiled tree configs at
+        # component construction, so they can change from run to run without
+        # rebuilding the platform tree. The path also goes into the gvsoc
+        # config for launchers which do not forward the CLI option (e.g. the
+        # GUI).
+        from gvsoc.systree_gvrun2 import dump_runtime_config
+        runtime_config_path = 'gvsoc_runtime_config.txt'
+        dump_runtime_config(self.target,
+            gvrun.commands.get_abspath(args, runtime_config_path))
+        gvsoc_config.set('runtime_config', runtime_config_path)
+
         dump_config(self.full_config, gvrun.commands.get_abspath(args, self.gvsoc_config_path))
 
         if norun:
@@ -662,7 +674,8 @@ class Runner():
 
                     command = stub
 
-                    command += [launcher, '--config=' + self.gvsoc_config_path]
+                    command += [launcher, '--config=' + self.gvsoc_config_path,
+                        '--runtime-config=' + runtime_config_path]
 
             os.chdir(args.work_dir)
 

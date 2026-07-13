@@ -554,3 +554,41 @@ target like any in-tree one, e.g. ``import mycat.my_model``.
 This is the same mechanism used by the tutorials, which pass ``MODULES=$(CURDIR)``
 to the SDK Makefile so that the tutorial directory itself is treated as an
 external module root.
+
+Runtime-carried config fields
+-----------------------------
+
+Config-struct fields are normally baked into the compiled platform tree:
+their values are part of the generated ``tree.cpp`` and of the tree
+signature, so changing them (e.g. through a target parameter) requires
+rebuilding the target. Fields whose values are pure *data* for a fixed
+platform shape can opt out of this by being marked runtime:
+
+.. code-block:: python
+
+    from typing import Annotated
+    from gvrun.runtime import Runtime
+
+    class MyConfig(Config):
+        stim_file: Annotated[str, Runtime] = cfg_field(default='')
+        latencies: Annotated[list[LatencyConfig], Runtime] = cfg_field(default_factory=list)
+
+Scalars (``int``, ``bool``, ``float``, ``str``) and lists of flat Config
+classes (scalar/string fields only) are supported. For a runtime field, the
+generated tree carries only the class default and a descriptor
+(name/offset/type); the live value is written by gvrun at every invocation
+into a plain-text key/value file in the work directory
+(``gvsoc_runtime_config.txt``), passed to the engine with
+``--runtime-config``. The engine overlays the values onto the typed config
+struct at component construction, before the model constructor body runs,
+so the C++ model reads ``this->cfg.<field>`` as usual.
+
+The file format is one ``<component path>/<field>=<value>`` entry per line;
+a list field's own key carries the element count and each element follows
+as ``<component path>/<field>/<index>/<subfield>=<value>``. A key which no
+component consumes is a fatal error (it catches typos and stale files).
+
+Only mark fields that do **not** influence generation: a field the Python
+generator reads to select sources or compile flags (e.g. an ``atomics``
+flag turning into a ``-D`` define) must stay baked, so that changing it
+keeps invalidating the tree signature and forcing the rebuild it needs.

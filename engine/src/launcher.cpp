@@ -172,8 +172,10 @@ void gv::Controller::init(gv::GvsocConf *conf)
             // caller and may not outlive this call, and restart needs the path to
             // instantiate the system again.
             this->config_path = conf->config_path;
+            this->runtime_config_path = conf->runtime_config_path;
 
-            this->handler = new vp::Top(conf->config_path, this->is_async, this);
+            this->handler = new vp::Top(conf->config_path, conf->runtime_config_path,
+                this->is_async, this);
 
             this->instance = this->handler->top_instance;
             this->instance->set_launcher(this);
@@ -375,7 +377,7 @@ void gv::Controller::restart(ControllerClient *client)
 
     // Rebuild, mirroring init(), open() and start(). The engine and sigint threads are
     // not recreated, they stay around and dereference the new handler once resumed.
-    this->handler = new vp::Top(this->config_path, this->is_async, this);
+    this->handler = new vp::Top(this->config_path, this->runtime_config_path, this->is_async, this);
     this->instance = this->handler->top_instance;
     this->instance->set_launcher(this);
 

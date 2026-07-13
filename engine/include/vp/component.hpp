@@ -55,6 +55,8 @@ namespace vp
     class reg_64;
 
     struct ComponentTreeNode;  // forward declaration
+    struct RuntimeField;       // forward declaration
+    class RuntimeConfig;       // forward declaration
 
     class ComponentConf
     {
@@ -63,10 +65,12 @@ namespace vp
             vp::TimeEngine *time_engine, vp::TraceEngine *trace_engine,
             vp::PowerEngine *power_engine, vp::MemCheck *memcheck,
             const vp::ComponentTreeNode *tree_node = nullptr,
-            vp::StatsEngine *stats_engine = nullptr)
+            vp::StatsEngine *stats_engine = nullptr,
+            vp::RuntimeConfig *runtime_config = nullptr)
             : name(name), parent(parent), config(config), gv_config(gv_config),
             time_engine(time_engine), trace_engine(trace_engine), power_engine(power_engine),
-            memcheck(memcheck), tree_node(tree_node), stats_engine(stats_engine) {}
+            memcheck(memcheck), tree_node(tree_node), stats_engine(stats_engine),
+            runtime_config(runtime_config) {}
         std::string name;
         vp::Component *parent;
         js::Config *config;
@@ -77,6 +81,7 @@ namespace vp
         vp::MemCheck *memcheck;
         const vp::ComponentTreeNode *tree_node;
         vp::StatsEngine *stats_engine;
+        vp::RuntimeConfig *runtime_config;
     };
 
     /**
@@ -186,14 +191,16 @@ namespace vp
         bool has_tree_config() const { return this->tree_config != nullptr; }
 
         /**
-         * @brief Overlay run-time-settable fields from the JSON property
-         * wire onto a typed config struct pointed to by ``cfg``.
+         * @brief Overlay run-time-settable fields from the per-run runtime
+         * config file onto a typed config struct pointed to by ``cfg``.
          *
          * Invoked automatically by the templated ``Component(config, cfg)``
          * constructor after the ``memcpy`` from ``tree_config``. Walks the
          * RuntimeField table attached to this component's tree node and,
-         * for each entry, fetches the JSON property and writes it at the
-         * given offset inside ``cfg``.
+         * for each entry, fetches the value from the runtime config store
+         * (key: ``<component path>/<field>``) and writes it at the given
+         * offset inside ``cfg``. List fields get a heap-allocated element
+         * array.
          *
          * Strings are ``strdup``-ed and live for the duration of the
          * simulation (single platform lifetime).
@@ -241,7 +248,8 @@ namespace vp
             vp::TimeEngine *time_engine, vp::TraceEngine *trace_engine,
             vp::PowerEngine *power_engine, vp::MemCheck *memcheck,
             const vp::ComponentTreeNode *tree_node = nullptr,
-            vp::StatsEngine *stats_engine = nullptr);
+            vp::StatsEngine *stats_engine = nullptr,
+            vp::RuntimeConfig *runtime_config = nullptr);
 
         // Used by the launcher to set himself as launcher. Could be moved to ComponentConfig
         void set_launcher(gv::Controller *launcher);
@@ -344,6 +352,15 @@ namespace vp
 
         // Pointer to constexpr config from the compiled tree
         const void *tree_config = nullptr;
+
+        // Per-run runtime config values, for overlaying runtime fields and
+        // passing to children
+        vp::RuntimeConfig *runtime_config = nullptr;
+
+    private:
+        // Overlay one scalar/string runtime field at its offset inside base
+        static void apply_runtime_field(char *base, const vp::RuntimeField &field,
+            const std::string &value);
     };
 
 };
