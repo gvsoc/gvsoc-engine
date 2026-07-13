@@ -140,9 +140,34 @@ namespace vp
 
         void voltage_set_all(int voltage);
 
+        /**
+         * @brief Set temperature
+         *
+         * This sets the temperature for all the power sources of this component
+         * and all his childs, so that their power numbers are re-evaluated
+         * from their tables with the new temperature.
+         *
+         * @param temp Temperature
+         */
+        void temperature_set_all(double temp);
+
         void set_frequency(int64_t frequency);
 
         double get_average_power(double &dynamic_power, double &static_power);
+
+        /**
+         * @brief Get the total energy consumed since the beginning of the simulation
+         *
+         * This returns the energy accumulated by the default power trace of this
+         * component, which covers the whole sub-hierarchy. Contrary to the report
+         * window, the total counters are never reset, so several consumers can
+         * monitor power by taking deltas without interfering with each other or
+         * with the power report.
+         *
+         * @param dynamic Total dynamic energy is reported here
+         * @param leakage Total leakage energy is reported here
+         */
+        void get_total_energy(double *dynamic, double *leakage);
 
         double get_instant_power(double &dynamic_power, double &static_power);
 

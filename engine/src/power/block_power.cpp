@@ -243,6 +243,26 @@ void vp::BlockPower::voltage_set_all(int voltage)
     }
 }
 
+void vp::BlockPower::temperature_set_all(double temp)
+{
+    this->top.get_trace()->msg(vp::TraceLevel::DEBUG, "Setting temperature (temp: %f)\n", temp);
+
+    for (PowerSource *power_source : this->sources)
+    {
+        power_source->set_temperature(temp);
+    }
+
+    for (auto &x : this->top.get_childs())
+    {
+        x->power.temperature_set_all(temp);
+    }
+}
+
+void vp::BlockPower::get_total_energy(double *dynamic, double *leakage)
+{
+    this->get_power_trace()->get_total_energy(dynamic, leakage);
+}
+
 std::vector<gv::PowerReport *> vp::CompPowerReport::get_childs()
 {
     std::vector<gv::PowerReport *> result;

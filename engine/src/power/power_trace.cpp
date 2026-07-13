@@ -33,6 +33,8 @@ int vp::PowerTrace::init(Block *top, std::string name, vp::PowerTrace *parent)
     this->quantum_power_for_cycle = 0;
     this->report_dynamic_energy = 0;
     this->report_leakage_energy = 0;
+    this->total_dynamic_energy = 0;
+    this->total_leakage_energy = 0;
     this->curent_cycle_timestamp = 0;
 
     // If no trace parent is specified, take the default one of the parent component
@@ -99,6 +101,20 @@ void vp::PowerTrace::get_report_energy(double *dynamic, double *leakage)
 {
     *dynamic = this->get_report_dynamic_energy();
     *leakage = this->get_report_leakage_energy();
+}
+
+
+
+void vp::PowerTrace::get_total_energy(double *dynamic, double *leakage)
+{
+    // First convert the pending background and leakage power into energy so that
+    // the totals are up-to-date. This is harmless for the report window since it
+    // gets the same energy accounted.
+    this->account_dynamic_power();
+    this->account_leakage_power();
+
+    *dynamic = this->total_dynamic_energy;
+    *leakage = this->total_leakage_energy;
 }
 
 
@@ -178,6 +194,7 @@ void vp::PowerTrace::account_dynamic_power()
         // before any modification to the power.
         double energy = this->current_dynamic_power * diff;
         this->report_dynamic_energy += energy;
+        this->total_dynamic_energy += energy;
 
         // And update the timestamp to the current one to start a new window
         this->current_dynamic_power_timestamp = this->top->time.get_time();
@@ -199,6 +216,7 @@ void vp::PowerTrace::account_leakage_power()
         // before any modification to the power.
         double energy = this->current_leakage_power * diff;
         this->report_leakage_energy += energy;
+        this->total_leakage_energy += energy;
 
         // And update the timestamp to the current one to start a new window
         this->current_leakage_power_timestamp = this->top->time.get_time();
@@ -221,6 +239,7 @@ void vp::PowerTrace::inc_dynamic_energy(double quantum)
     double power = quantum / this->top->clock.get_period();
     this->quantum_power_for_cycle += power;
     this->report_dynamic_energy += quantum;
+    this->total_dynamic_energy += quantum;
 
     // Redump VCD trace since the instant power is impacted
     this->dump_vcd_trace();

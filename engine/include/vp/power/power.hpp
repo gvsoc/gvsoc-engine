@@ -184,6 +184,8 @@ namespace vp
 
         void set_voltage(double voltage);
 
+        void set_temperature(double temp);
+
         /**
          * @brief Turn on a power source
          *
@@ -316,6 +318,18 @@ namespace vp
         void get_report_energy(double *dynamic, double *leakage);
 
         /**
+         * @brief Report the total energy consumed since the beginning of the simulation.
+         *
+         * Contrary to the report window, the total counters are never reset, so
+         * several consumers can monitor power by taking deltas without interfering
+         * with each other or with the report window.
+         *
+         * @param dynamic Total dynamic energy is reported here.
+         * @param leakage Total leakage energy is reported here.
+         */
+        void get_total_energy(double *dynamic, double *leakage);
+
+        /**
          * @brief Report the current instant power.
          *
          * Report the sum of background dynamic power, leakage power, and
@@ -433,6 +447,11 @@ namespace vp
                                             // It is used to compute the average power when the report is dumped
         double report_dynamic_energy;     // Total amount of dynamic energy spent since the report was started
         double report_leakage_energy;     // Total amount of leakage energy spent since the report was started
+
+        double total_dynamic_energy;      // Total amount of dynamic energy spent since the beginning of the
+                                            // simulation. Never reset, consumers take deltas.
+        double total_leakage_energy;      // Total amount of leakage energy spent since the beginning of the
+                                            // simulation. Never reset, consumers take deltas.
 
         int64_t current_dynamic_power_timestamp; // Indicate the timestamp of the last time the background energy
                                                     // was accounted. This is used everytime background power is

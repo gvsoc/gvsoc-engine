@@ -401,6 +401,18 @@ namespace vp {
         */
         void new_reg(std::string name, vp::reg_64 *reg, uint64_t reset_val, bool reset = true);
 
+        /**
+         * @brief Get a block from its path
+         *
+         * Walk the block hierarchy below this block to find the block at the
+         * specified path. Mostly used by external controllers (launcher or
+         * proxy) and platform-level observers (e.g. the thermal model).
+         *
+         * @param path_list Path of the block, one element per hierarchy level.
+         * @return The block, or NULL if none was found at this path.
+         */
+        vp::Block *get_block_from_path(std::vector<std::string> path_list);
+
     private:
 
         /*
@@ -412,9 +424,6 @@ namespace vp {
         // Used by the trace engine to get a trace from the full path by going through
         // the whole hierarchy
         void get_trace_from_path(std::vector<vp::Trace *> &traces, std::string path);
-
-        // Used by external controllers (launcher or proxy)
-        vp::Block *get_block_from_path(std::vector<std::string> path_list);
 
         // Get all blocks contained by this block
         std::vector<vp::Block *> get_childs() { return this->childs; }

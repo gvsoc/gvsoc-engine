@@ -58,6 +58,20 @@ void vp::PowerSource::set_voltage(double voltage)
     }
 }
 
+void vp::PowerSource::set_temperature(double temp)
+{
+    bool is_on = this->is_on;
+    if (is_on)
+    {
+        this->turn_off();
+    }
+    this->setup(temp, this->current_volt, this->current_freq);
+    if (is_on)
+    {
+        this->turn_on();
+    }
+}
+
 
 void vp::PowerSource::setup(double temp, double volt, double freq)
 {
