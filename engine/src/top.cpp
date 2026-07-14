@@ -19,6 +19,7 @@
  * Authors: Germain Haugou, GreenWaves Technologies (germain.haugou@greenwaves-technologies.com)
  */
 
+#include <filesystem>
 #include <string>
 #include <dlfcn.h>
 #include <vp/vp.hpp>
@@ -46,6 +47,24 @@ vp::Top::Top(std::string config_path, std::string runtime_config_path, bool is_a
         if (runtime_config_cfg != nullptr)
         {
             runtime_config_path = runtime_config_cfg->get_str();
+
+            // The runner dumps the file next to the gvsoc config and stores
+            // a work-dir-relative name, counting on the engine running from
+            // the work dir. Launchers like the GUI run from anywhere, so
+            // resolve a relative name against the config's own directory
+            // (falling back to the plain cwd-relative name when not there,
+            // since a missing runtime config silently applies the baked
+            // defaults).
+            if (!runtime_config_path.empty() && runtime_config_path[0] != '/')
+            {
+                std::filesystem::path resolved =
+                    std::filesystem::path(config_path).parent_path()
+                    / runtime_config_path;
+                if (std::filesystem::exists(resolved))
+                {
+                    runtime_config_path = resolved.string();
+                }
+            }
         }
     }
     this->runtime_config = new vp::RuntimeConfig();
