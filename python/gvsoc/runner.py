@@ -365,10 +365,13 @@ if os.environ.get('USE_GVRUN') is None:
                 if get_config_fields is None:
                     return
                 # Recursively pull in element classes of list-of-Config fields
-                # so their headers get generated alongside the parent's.
+                # and by-value nested configs so their headers get generated
+                # alongside the parent's.
                 for fld in get_config_fields(cls):
                     if fld['cpp_type'] == 'list':
                         _add(fld['list_elem_cls'])
+                    elif fld['cpp_type'] == 'nested':
+                        _add(fld['nested_cls'])
 
             config = getattr(component, '_component_config', None)
             if config is not None and is_dataclass(config):

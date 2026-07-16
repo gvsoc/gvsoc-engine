@@ -949,7 +949,13 @@ WARN_LOGFILE           =
 # spaces. See also FILE_PATTERNS and EXTENSION_MAPPING
 # Note: If this tag is empty the current directory is searched.
 
-INPUT                  = ../../models/utils/uart/uart_adapter.hpp
+INPUT                  = ../../../core/models/utils/uart/uart_adapter.hpp \
+                         ../../engine/include/vp/power/power.hpp \
+                         ../../engine/include/vp/power/block_power.hpp \
+                         ../../engine/include/vp/power/power_table.hpp \
+                         ../../engine/include/vp/power/power_table_convert.hpp \
+                         ../../engine/include/gv/gvsoc.hpp \
+                         ../../../core/models/thermal/thermal_simulator.hpp
 
 # This tag can be used to specify the character encoding of the source files
 # that doxygen parses. Internally doxygen uses the UTF-8 encoding. Doxygen uses

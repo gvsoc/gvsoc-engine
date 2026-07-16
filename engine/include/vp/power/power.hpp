@@ -67,11 +67,23 @@ namespace vp
     class BlockPower;
     struct PowerSourceTable;
 
+    /**
+     * @brief Power supply state of a component
+     *
+     * State applied to a component and its whole sub-hierarchy through
+     * vp::BlockPower::power_supply_set_all, usually as the result of a write
+     * to the built-in *power_supply* port of the component.
+     */
     enum PowerSupplyState
     {
+        /** Power is off. Power sources account neither leakage nor dynamic power. */
         OFF=0,
-        ON_CLOCK_GATED=2,
-        ON=1
+        /** Power is on. Power sources account leakage and, when started, dynamic power. */
+        ON=1,
+        /** Power is on but the clock is gated. The framework accounts it like ON;
+            models are expected to react through vp::Block::power_supply_set, typically
+            by stopping their background dynamic power. */
+        ON_CLOCK_GATED=2
     };
 
     /**

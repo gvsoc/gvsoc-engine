@@ -20,6 +20,7 @@ It aims to help users:
    gvsoc_archi.rst
    interfaces/index.rst
    models.rst
+   power.rst
    tutorials.rst
    components/index.rst
    targets/index.rst
