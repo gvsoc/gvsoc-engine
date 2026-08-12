@@ -309,6 +309,14 @@ class IoReq : public vp::QueueElem {
     uint8_t *get_second_data() { return this->second_data; }
     void set_second_data(uint8_t *data) { this->second_data = data; }
 
+    // Optional byte strobe for writes: one byte per data byte, non-zero to
+    // commit it. NULL (the default, restored by prepare()) means every byte
+    // of the request is written, which is what all initiators except the
+    // masked vector store do. Targets that hold storage must honour it;
+    // pure forwarders pass the request through untouched and need no change.
+    uint8_t *get_strb() { return this->strb; }
+    void set_strb(uint8_t *strb) { this->strb = strb; }
+
     // Memcheck shadow transport, only active in debug builds (VP_MEMCHECK_ACTIVE)
     // with memory checking enabled. memcheck_data points to a per-byte validity
     // shadow of `data` (0xFF = initialized); NULL means the initiator carries no
@@ -376,6 +384,7 @@ class IoReq : public vp::QueueElem {
     void prepare()
     {
         this->latency = 0; this->duration = 0; this->status = IO_RESP_OK;
+        this->strb = NULL;
 #ifdef VP_MEMCHECK_ACTIVE
         this->memcheck_data = NULL;
         this->second_memcheck_data = NULL;
@@ -387,6 +396,8 @@ class IoReq : public vp::QueueElem {
     uint8_t *data;
     // Non-initialized flags for additional atomics data
     uint8_t *second_data;
+    // Optional per-byte write strobe, see the accessors above.
+    uint8_t *strb = NULL;
     // Memcheck shadow transport, see the accessors above. Kept unconditionally in
     // the struct so the request layout does not depend on VP_MEMCHECK_ACTIVE.
     uint8_t *memcheck_data = NULL;
