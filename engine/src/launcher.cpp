@@ -750,6 +750,32 @@ void gv::Controller::step_until_sync(int64_t end_time, ControllerClient *client)
 
 void gv::Controller::step_until_async(int64_t end_time, ControllerClient *client, bool wait, void *request)
 {
+    // The simulation is already over: the time engine will never run again, so the event enqueued
+    // below would never fire, and sim_finished's one-shot drain of the step block has already gone
+    // past. Report the step-end straight away instead, carrying a reason, so a front-end blocked on
+    // this step unblocks rather than waiting forever for a reply that cannot come (a control script
+    // polling with run(duration) until the simulation ends hits this on its last step). Same
+    // routing as abort_step_cycles uses for interrupted cycle-steps. Both this method and
+    // sim_finished run under the engine mutex, so the flag cannot flip between here and the
+    // enqueue.
+    if (this->is_sim_finished)
+    {
+        for (gv::ControllerClient *c: this->clients)
+        {
+            if (c->user)
+            {
+                c->user->handle_step_end(request);
+            }
+        }
+
+        if (this->proxy)
+        {
+            this->proxy->step_end(request, "simulation finished");
+        }
+
+        return;
+    }
+
     vp::TimeEvent *event = new vp::TimeEvent(this->step_block);
     event->set_callback(this->step_async_handler);
     event->get_args()[0] = this;
