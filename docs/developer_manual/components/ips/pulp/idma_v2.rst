@@ -313,15 +313,17 @@ Write pipeline
      their bytes have arrived from the source). Each beat carries
      its slot id as ``burst_id`` plus per-beat ``is_first`` /
      ``is_last`` flags. Pacing is one beat per cycle.
-  4. The ``resp_meth`` callback on a write beat advances
-     ``bytes_responded`` by ``req->get_size()`` and then walks
-     ``write_pending_acks``, popping every entry whose end-byte
-     falls at or before ``bytes_responded`` and calling
-     ``be->ack_data(transfer, src_chunk_ptr, size)`` — i.e. the
-     source only sees a chunk acknowledged after the
-     corresponding write beats have really been responded to. When
-     ``bytes_responded == total_size`` the slot returns to the
-     free pool.
+  4. A write burst is acknowledged once, per burst (AXI B-channel
+     semantics): the target consumes and frees the granted beats and
+     answers with one data-less ``is_last`` ack carrying the burst's
+     ``initiator``. ``resp_meth`` (or an inline ``IO_REQ_DONE`` on the
+     last beat) then drains the slot's whole ``write_pending_acks``
+     in order, calling ``be->ack_data(transfer, src_chunk_ptr, size)``
+     for each source chunk — the source only sees its chunks
+     acknowledged after the write has really completed — and returns
+     the slot to the free pool. All requests come from the shared
+     size-0 ``vp::IoReqAllocator`` pool; the beat data aliases the
+     slot's staging buffer.
 
 Steady-state write throughput is **one beat per cycle**, bounded by
 the same three factors as reads (slave bandwidth, source feed rate,
