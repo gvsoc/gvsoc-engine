@@ -110,10 +110,15 @@
 //
 // The write ack:
 //
-//   - Allocated from the size-0 IoReqAllocator pool and prepare()'d by the
-//     producer. A producer that owns the burst's consumed size-0 last beat
-//     MAY recycle that very object as the ack (the initiator cannot tell —
-//     it must never correlate by object identity).
+//   - A dedicated request, allocated from the size-0 IoReqAllocator pool and
+//     prepare()'d by the producer. A producer that owns the burst's consumed
+//     pool-backed last beat frees it and MUST NOT recycle it as the ack: it
+//     cannot know which pool the beat came from, and a sized pool promises
+//     its co-allocated payload to the next allocation. The one exception is
+//     a master-owned object (no allocator back-pointer: a classic round-trip
+//     write on a non-beat flow), which is not the producer's to free and
+//     travels back itself. io_v2_write_ack() implements both cases; the
+//     initiator must never correlate by object identity either way.
 //   - Fields: opcode WRITE; data == NULL (mandatory); is_first = is_last =
 //     true; burst_id = the id carried by the burst's beats (routers remap and
 //     restore it exactly as for read beats); initiator = copied from the
@@ -524,6 +529,36 @@ inline void IoReq::free()
     vp_assert(this->allocator != nullptr, (vp::Trace *)nullptr,
         "IoReq::free() on a request without an allocator back-pointer\n");
     this->allocator->free(this);
+}
+
+/*
+ * Build the single data-less ack of a write burst from its consumed last
+ * beat (see "The write ack" above). A pool-backed beat goes back to its
+ * pool and the ack is a dedicated request from the size-0 pool; a
+ * master-owned object (no allocator back-pointer, a classic round-trip
+ * write) must travel back itself, so it is prepared in place. Either way
+ * the result carries the burst's burst_id and initiator, opcode WRITE,
+ * data NULL and is_first = is_last = true; the caller sets addr, size,
+ * status and any timing annotation.
+ */
+inline IoReq *io_v2_write_ack(IoReq *beat)
+{
+    int64_t burst_id = beat->burst_id;
+    void *initiator = beat->initiator;
+    IoReq *ack = beat;
+    if (beat->allocator != nullptr)
+    {
+        beat->free();
+        ack = IoReqAllocator::get(0)->alloc();
+    }
+    ack->prepare();
+    ack->set_is_write(true);
+    ack->set_data(nullptr);
+    ack->is_first = true;
+    ack->is_last = true;
+    ack->burst_id = burst_id;
+    ack->initiator = initiator;
+    return ack;
 }
 
 /*
