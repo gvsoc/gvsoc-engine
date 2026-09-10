@@ -57,18 +57,20 @@ class DisplayBox(object):
     format : str, optional
         'hex' (default) or 'dec'.
     aggregation : str, optional
-        What the area average column shows: 'average' (per-cycle average,
-        default) or 'sum' (sum of value x cycles over the selection, i.e. the
-        total number of events for a count asserted one cycle per event).
+        Default metric of the area average column: 'average' (per-cycle
+        average), 'sum' (sum of value x cycles over the selection, i.e. the
+        total number of events for a count asserted one cycle per event), or
+        None to let the box decide (average for a 1-bit value, blank for a
+        wider one). The GUI context menu can override it per signal.
     """
-    def __init__(self, format="hex", aggregation: str='average'):
+    def __init__(self, format="hex", aggregation: str=None):
         self.format = format
         self.aggregation = aggregation
 
     def get(self):
         config = { 'type': 'box', 'format': self.format }
-        if self.aggregation == 'sum':
-            config['aggregation'] = 'sum'
+        if self.aggregation is not None:
+            config['aggregation'] = self.aggregation
         return config
 
 class DisplayLogicBox(object):
