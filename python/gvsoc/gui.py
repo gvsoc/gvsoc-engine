@@ -50,11 +50,26 @@ class DisplayAnalog(object):
         return { 'type': 'analog' }
 
 class DisplayBox(object):
-    def __init__(self, format="hex"):
+    """Integer value display.
+
+    Parameters
+    ----------
+    format : str, optional
+        'hex' (default) or 'dec'.
+    aggregation : str, optional
+        What the area average column shows: 'average' (per-cycle average,
+        default) or 'sum' (sum of value x cycles over the selection, i.e. the
+        total number of events for a count asserted one cycle per event).
+    """
+    def __init__(self, format="hex", aggregation: str='average'):
         self.format = format
+        self.aggregation = aggregation
 
     def get(self):
-        return { 'type': 'box', 'format': self.format }
+        config = { 'type': 'box', 'format': self.format }
+        if self.aggregation == 'sum':
+            config['aggregation'] = 'sum'
+        return config
 
 class DisplayLogicBox(object):
     def __init__(self, message):
