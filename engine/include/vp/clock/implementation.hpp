@@ -90,9 +90,22 @@ inline vp::ClockEngine *vp::BlockClock::get_engine()
 
 inline void vp::ClockEngine::sync()
 {
-  if (!time.is_running() && this->permanent_first == NULL)
+  if (!time.is_running())
   {
-    this->update();
+    if (this->permanent_first == NULL)
+    {
+      this->update();
+    }
+    else if (!this->cycle_synced && this->time.get_is_enqueued() &&
+      this->time.get_next_event_time() == this->time.get_time())
+    {
+      // Permanent events: the cycle count is maintained by exec(). We are scheduled at the
+      // current time but another engine got executed first, count the cycle we are about to
+      // execute now so that the caller sees the same cycle count whatever the order in which
+      // the engines are executed, and tell exec() not to count it again.
+      this->cycles++;
+      this->cycle_synced = true;
+    }
   }
 }
 

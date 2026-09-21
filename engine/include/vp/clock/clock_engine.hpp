@@ -253,6 +253,14 @@ namespace vp
         // external event.
         int64_t stop_time = 0;
 
+        // Set when sync() has already counted the cycle this engine is about to
+        // execute. With permanent events the cycle count is incremented by
+        // exec(), so an engine scheduled at the current time but not yet
+        // executed is one cycle behind when it is called from another engine
+        // running at the same timestamp. sync() then counts that cycle itself
+        // and raises this flag so that exec() does not count it again.
+        bool cycle_synced = false;
+
         vp::Trace cycles_trace;
 
         vp::TimeEngine *time_engine = NULL;

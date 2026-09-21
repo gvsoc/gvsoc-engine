@@ -422,6 +422,18 @@ void vp::ClockEngine::trace_flush_handler(vp::Block *__this, vp::ClockEvent *eve
 
 int64_t vp::ClockEngine::exec()
 {
+    if (unlikely(this->cycle_synced))
+    {
+        // sync() already counted the cycle we are about to execute. The permanent events path
+        // below counts it by incrementing, so give it back to count it exactly once. The other
+        // paths either set an absolute cycle count or leave it as it is, which is then right.
+        this->cycle_synced = false;
+        if (this->permanent_first != NULL)
+        {
+            this->cycles--;
+        }
+    }
+
     this->cycles_trace.event_real(this->cycles);
 
     ClockEvent *current = this->permanent_first;
