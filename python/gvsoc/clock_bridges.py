@@ -26,7 +26,11 @@ to different clock sources. Each kind maps to a factory ``(parent, name,
 System designers can:
 
   - Leave the default ``'sync_only'`` (matches v1 auto-crossing: bring the
-    remote engine up to date before forwarding, no modeled latency).
+    remote engine up to date before forwarding, no modeled latency; a
+    response is resynchronized on the next edge of the master clock).
+  - Use ``'shared_clock'`` between two domains driven by the same clock
+    (shared edges, no synchronizer on the chip): a response arriving on an
+    edge goes through at once, as inside one domain.
   - Override per binding via ``itf_bind(..., clock_bridge='async_fifo')`` or
     ``clock_bridge=('async_fifo', {'depth': 4})``.
   - Set a policy on a parent component via ``set_clock_bridge_policy`` for
@@ -66,6 +70,16 @@ def _sync_only_factory(parent, name, **opts):
     return IoV2ClockBridge(parent, name)
 
 
+def _shared_clock_factory(parent, name, **opts):
+    # Two domains driven by the same clock (shared edges, no synchronizer):
+    # a plain relay in the same cycle, see utils.io_v2_shared_clock_bridge.
+    from utils.io_v2_shared_clock_bridge import IoV2SharedClockBridge
+    if opts:
+        raise RuntimeError(
+            f"'shared_clock' clock bridge takes no options, got {sorted(opts)}")
+    return IoV2SharedClockBridge(parent, name)
+
+
 def _cdc_2phase_beh_factory(parent, name, **opts):
     from utils.io_v2_clock_bridge import IoV2Cdc2PhaseBeh
     return IoV2Cdc2PhaseBeh(parent, name, **opts)
@@ -82,6 +96,7 @@ def _cdc_fifo_2phase_beh_factory(parent, name, **opts):
 
 
 register('sync_only', _sync_only_factory)
+register('shared_clock', _shared_clock_factory)
 register('cdc_2phase_beh', _cdc_2phase_beh_factory)
 register('cdc_fifo_gray_beh', _cdc_fifo_gray_beh_factory)
 register('cdc_fifo_2phase_beh', _cdc_fifo_2phase_beh_factory)
