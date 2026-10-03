@@ -198,6 +198,16 @@ vp_set_target_types(
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+if (APPLE)
+    # Unlike dlopen(RTLD_LOCAL) on Linux, dyld coalesces weak C++ definitions
+    # (inline and implicit methods) across every loaded image. Models such as the
+    # ISS are built several times with different class layouts under the same
+    # class names, so an inline method of one (e.g. Iss::~Iss) would end up being
+    # called on objects of another. Singletons that must stay process-wide, like
+    # gv::Controller::get(), are exported explicitly.
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>)
+endif()
+
 install(DIRECTORY bin/ DESTINATION bin USE_SOURCE_PERMISSIONS)
 
 if (NOT APPLE)

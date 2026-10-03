@@ -67,7 +67,9 @@ namespace gv {
         Controller();
         void init(gv::GvsocConf *conf);
 
-        static Controller &get() {
+        // Explicitly exported so that the singleton is shared by all models even
+        // when they are built with -fvisibility-inlines-hidden.
+        __attribute__((visibility("default"))) static Controller &get() {
             static Controller controller;
             return controller;
         }
