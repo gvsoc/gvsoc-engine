@@ -265,6 +265,7 @@ foreach(tree_src ${TREE_SOURCES})
     # runner_gvrun2.py, which — together with the ".so.sig" sidecar below —
     # assumes a ".so" name regardless of host.
     set_target_properties(${lib_target} PROPERTIES SUFFIX ".so")
+    vp_export_symbols(${lib_target} vp_get_platform_tree)
     target_include_directories(${lib_target} PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/engine/include)

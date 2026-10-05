@@ -330,17 +330,14 @@ vp::Component *vp::Component::load_component(js::Config *config, js::Config *gv_
 
     std::string module_path = vp::Component::get_module_path(gv_config, module_name);
 
-#if !defined(__APPLE__)
-    void *module = dlopen(module_path.c_str(), RTLD_NOW | RTLD_GLOBAL | RTLD_DEEPBIND);
-#else
-    // SCHEREMO: The behaviour of DEEPBIND is default on MAC OS, but the macro does not exist.
-    void *module = dlopen(module_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
-#endif
+    // Models only export gv_new (see vp_export_symbols in vp_model.cmake), so they are isolated from
+    // each other and nothing from them must be made visible to the libraries loaded afterwards.
+    void *module = dlopen(module_path.c_str(), RTLD_NOW | RTLD_LOCAL);
 
 #ifdef GVSOC_COVERAGE
     if (module != NULL)
     {
-        // With RTLD_DEEPBIND each .so has its own gcov runtime whose atexit
+        // Each .so has its own, private, gcov runtime whose atexit
         // handler may not fire reliably. Resolve each module's __gcov_dump
         // and register it so coverage data is flushed at exit.
         void (*gcov_dump)() = (void (*)())dlsym(module, "__gcov_dump");

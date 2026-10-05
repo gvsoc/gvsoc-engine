@@ -89,6 +89,8 @@ void *gv::Controller::signal_routine(void *__this)
     return NULL;
 }
 
+gv::Controller gv::Controller::controller;
+
 gv::Controller::Controller()
 : logger("LAUNCHER")
 {

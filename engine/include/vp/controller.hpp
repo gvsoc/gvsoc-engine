@@ -67,8 +67,9 @@ namespace gv {
         Controller();
         void init(gv::GvsocConf *conf);
 
+        // The instance is defined in the engine library, not as a function-local static, so that
+        // every model .so reaches the same controller whatever its symbol visibility.
         static Controller &get() {
-            static Controller controller;
             return controller;
         }
 
@@ -143,9 +144,8 @@ namespace gv {
         // Register an ELF binary a model has gained access to (statically at reset, or dynamically at
         // run time e.g. via semi-hosting). The path is accumulated in the engine and connected proxy
         // clients are notified that the binary set changed so they can re-query get_binaries() and
-        // (e.g. the console) auto-load symbols. Model code must reach this through the component
-        // (comp->get_launcher()) rather than Controller::get(): the latter's inline singleton
-        // resolves to a separate per-.so instance.
+        // (e.g. the console) auto-load symbols. Model code reaches this through the component
+        // (comp->get_launcher()).
         void declare_binary(const std::string &path);
         // The ELF binaries registered so far (snapshot copy). Queried by proxy clients via the
         // get_binaries proxy command.
@@ -196,6 +196,8 @@ namespace gv {
         bool is_init = false;
 
     private:
+        static Controller controller;
+
         // Tells if no client is preventing simulation from being run.
         bool is_runnable();
         // Thread engine entry in asynchronous mode

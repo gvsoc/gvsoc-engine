@@ -32,6 +32,42 @@ function(vp_set_target_types)
     endif()
 endfunction()
 
+# Restrict the dynamic symbols exported by a shared library to the given entry points.
+#
+# Models are built several times with different compile-time configurations but the same class
+# names. Keeping everything else local means the dynamic loader can never bind one model to
+# another model's definitions (inline methods, vtables, templates, statics), whatever the
+# platform, the compiler or the dlopen flags. Anything a model needs from the engine is imported
+# from the engine library, which keeps exporting its API.
+function(vp_export_symbols TARGET)
+    set(SYMBOLS ${ARGN})
+    # Coverage builds resolve each module's gcov dump function to flush the data at exit
+    if("${CMAKE_CXX_FLAGS}" MATCHES "GVSOC_COVERAGE")
+        list(APPEND SYMBOLS __gcov_dump)
+    endif()
+
+    if(APPLE)
+        foreach(SYMBOL IN LISTS SYMBOLS)
+            target_link_options(${TARGET} PRIVATE "LINKER:-exported_symbol,_${SYMBOL}")
+        endforeach()
+    else()
+        list(JOIN SYMBOLS "; " SYMBOLS_STR)
+        string(MAKE_C_IDENTIFIER "${SYMBOLS_STR}" SCRIPT_NAME)
+        set(SCRIPT "${CMAKE_BINARY_DIR}/vp_exports/${SCRIPT_NAME}.map")
+        set(CONTENT "{\n  global: ${SYMBOLS_STR};\n  local: *;\n};\n")
+        # Only rewrite the script when it changes, so that a reconfigure does not relink everything
+        set(OLD_CONTENT "")
+        if(EXISTS ${SCRIPT})
+            file(READ ${SCRIPT} OLD_CONTENT)
+        endif()
+        if(NOT "${OLD_CONTENT}" STREQUAL "${CONTENT}")
+            file(WRITE ${SCRIPT} "${CONTENT}")
+        endif()
+        target_link_options(${TARGET} PRIVATE "LINKER:--version-script=${SCRIPT}")
+        set_property(TARGET ${TARGET} APPEND PROPERTY LINK_DEPENDS ${SCRIPT})
+    endif()
+endfunction()
+
 # vp_block function
 function(vp_block)
     cmake_parse_arguments(
@@ -496,6 +532,11 @@ function(vp_model)
                 endforeach()
             endforeach()
         endif()
+
+        # The engine only looks up gv_new in a model
+        foreach (TARGET_TYPE IN LISTS VP_TARGET_TYPES)
+            vp_export_symbols(${VP_MODEL_NAME}${TARGET_TYPE} gv_new)
+        endforeach()
 
     endif()
 endfunction()

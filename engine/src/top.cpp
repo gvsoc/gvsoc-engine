@@ -79,7 +79,7 @@ vp::Top::Top(std::string config_path, std::string runtime_config_path, bool is_a
     if (tree_lib_cfg != nullptr)
     {
         std::string tree_lib_path = tree_lib_cfg->get_str();
-        void *tree_lib = dlopen(tree_lib_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+        void *tree_lib = dlopen(tree_lib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (tree_lib != nullptr)
         {
             auto get_tree = (const vp::ComponentTreeNode *(*)())dlsym(tree_lib, "vp_get_platform_tree");
