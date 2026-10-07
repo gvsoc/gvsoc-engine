@@ -280,21 +280,31 @@ class Component(gvrun.target.SystemTreeNode):
 
         self.configure()
 
-    def add_vcd_trace(self, path: str, trace_type: str):
+    def add_vcd_trace(self, path: str, trace_type: str, gui: str=None, display=None):
         """Declare a user VCD trace.
 
         This registers a VCD trace that the GVSoC engine will create at startup.
         The trace can then be opened from the simulated software using
-        gv_vcd_open_trace().
+        gv_vcd_open_trace(). The gvrun option --vcd-trace declares them the same way.
 
         Parameters
         ----------
         path : str
             Path of the trace (e.g. 'kernel/active').
         trace_type : str
-            Type of the trace: 'int' for integer values, 'string' for string values.
+            Type of the trace: 'int' for integer values, 'real' for real values (written with
+            integers, shown as an analog curve), 'string' for string values.
+        gui : str, optional
+            Where to show the trace in the GUI signal tree, as a path of groups ending with
+            the signal name (e.g. 'kernels/active'). Not shown by this method if None, the
+            caller can then add the signal itself with add_gui_callback.
+        display : optional
+            Display of the GUI signal (gvsoc.gui.Display* object), defaults to a box for
+            integers, to an analog curve for reals and to a string box for strings.
         """
-        self.vcd_traces.append({'path': path, 'type': trace_type})
+        # Declared again (e.g. both in config.py and on the command line): the last one wins
+        self.vcd_traces = [trace for trace in self.vcd_traces if trace['path'] != path]
+        self.vcd_traces.append({'path': path, 'type': trace_type, 'gui': gui, 'display': display})
 
     def get_vcd_traces(self):
         """Get all declared user VCD traces.

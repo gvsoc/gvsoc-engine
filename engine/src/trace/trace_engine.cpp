@@ -780,6 +780,12 @@ void vp::TraceEngine::init(vp::Component *top)
                 top->traces.new_trace_event(path, trace, 32);
                 this->init_traces.push_back(trace);
             }
+            else if (type == "real")
+            {
+                // Written with integers by the software, shown as an analog curve
+                vp::Trace *trace = new vp::Trace();
+                top->traces.new_trace_event_real(path, trace);
+            }
         }
     }
 }

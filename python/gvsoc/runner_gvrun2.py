@@ -123,6 +123,64 @@ def gen_config(args, config, cosim_mode):
     return full_config, gvsoc_config_path
 
 
+def vcd_trace_parse(spec: str) -> dict:
+    """Parse a --vcd-trace option into the arguments of add_vcd_trace.
+
+    Format: PATH[:KEY=VALUE]..., see the option help.
+    """
+    fields = spec.split(':')
+    path = fields[0].strip('/')
+    if path == '':
+        raise RuntimeError(f'Invalid --vcd-trace option, no trace path: {spec}')
+
+    options = {}
+    for field in fields[1:]:
+        key, sep, value = field.partition('=')
+        if sep == '':
+            raise RuntimeError(f'Invalid --vcd-trace option, expected KEY=VALUE, got "{field}": '
+                f'{spec}')
+        options[key] = value
+
+    trace_type = options.pop('type', 'int')
+    if trace_type not in ['int', 'real', 'string']:
+        raise RuntimeError(f'Invalid --vcd-trace type, expected int, real or string: {spec}')
+
+    gui = options.pop('gui', path)
+
+    default_displays = { 'int': 'box', 'real': 'analog', 'string': 'string_box' }
+    display_type = options.pop('display', default_displays[trace_type])
+
+    labels = options.pop('labels', None)
+    if labels is not None:
+        # VALUE=NAME[@COLOR],... with NAME '-' for a value drawn as an inactive line
+        label_dict = {}
+        for label in labels.split(','):
+            value, sep, name = label.partition('=')
+            if sep == '':
+                raise RuntimeError(f'Invalid --vcd-trace label, expected VALUE=NAME: {spec}')
+            name, sep, color = name.partition('@')
+            if name == '-':
+                label_dict[int(value, 0)] = None
+            elif color != '':
+                label_dict[int(value, 0)] = (name, int(color, 0) if color[0].isdigit() else color)
+            else:
+                label_dict[int(value, 0)] = name
+        labels = label_dict
+
+    display_options = {}
+    for key in ['format', 'aggregation', 'message']:
+        if key in options:
+            display_options[key] = options.pop(key)
+
+    if len(options) != 0:
+        raise RuntimeError(f'Unknown --vcd-trace keys {", ".join(options.keys())}: {spec}')
+
+    return {
+        'path': path, 'trace_type': trace_type, 'gui': gui if gui != '' else None,
+        'display': gvsoc.gui.display_build(display_type, labels=labels, **display_options)
+    }
+
+
 def _strip_tree_data(config):
     """Recursively remove data handled by the compiled tree .so."""
     if hasattr(config, 'items') and isinstance(config.items, dict):
@@ -218,6 +276,10 @@ class Runner():
                     }
                 }
             })
+
+        # User VCD traces given on the command line, declared like the ones of config.py
+        for spec in getattr(args, 'vcd_traces', []):
+            self.target.add_vcd_trace(**vcd_trace_parse(spec))
 
         # Collect user VCD traces declared on the model and inject into gvsoc config
         vcd_traces = self.target.get_vcd_traces()
@@ -768,6 +830,15 @@ class Runner():
             config = GuiConfig(self.args)
             self.target.gen_gui_stub(config)
 
+            # User VCD traces to be shown in the GUI, at their GUI path, on top of the platform
+            # signals
+            nb_platform_signals = len(config.child_signals)
+            for trace in self.target.get_vcd_traces():
+                if trace.get('gui') is not None:
+                    self.vcd_trace_gui_signal(config, trace)
+            config.child_signals = config.child_signals[nb_platform_signals:] + \
+                config.child_signals[:nb_platform_signals]
+
             gui_signals = self.full_config.get('target/gvsoc/gui/signals')
             if gui_signals is not None:
                 for name, signal_config in gui_signals.get_items().items():
@@ -782,6 +853,31 @@ class Runner():
                             path='/' + signal_path, display=display)
 
             config.gen(fd)
+
+    def vcd_trace_gui_signal(self, config, trace):
+        # The GUI path is a path of groups, created if needed, ending with the signal name
+        names = trace['gui'].strip('/').split('/')
+        parent = config
+        for name in names[:-1]:
+            group = None
+            for child in parent.child_signals:
+                if child.name == name and child.path is None:
+                    group = child
+                    break
+            if group is None:
+                group = gvsoc.gui.Signal(None, parent, name=name)
+            parent = group
+
+        display = trace.get('display')
+        if display is None:
+            if trace['type'] == 'int':
+                display = gvsoc.gui.DisplayBox()
+            elif trace['type'] == 'real':
+                display = gvsoc.gui.DisplayAnalog()
+            else:
+                display = gvsoc.gui.DisplayStringBox()
+
+        gvsoc.gui.Signal(None, parent, name=names[-1], path='/' + trace['path'], display=display)
 
     def gen_gtkw_script(self, work_dir, path, tags=[], level=0, trace_file=None, gen_full_tree=False):
         self.vcd_group_create = False
@@ -868,6 +964,19 @@ class Target(gvrun.target.Target):
 
             parser.add_argument("--event-format", dest="format", default=None,
                 help="Specify events format (vcd or fst)")
+
+            parser.add_argument("--vcd-trace", dest="vcd_traces", default=[], action="append",
+                help="Declare a VCD trace which the simulated software can open (gv_vcd_open_trace) "
+                    "and show it in the GUI. Format: PATH[:KEY=VALUE]..., keys: "
+                    "type=int|real|string (default int, real is written with integers and "
+                    "shown as an analog curve), "
+                    "gui=GROUP/.../NAME (place in the GUI signal tree, default PATH, empty to hide), "
+                    "display=box|string_box|string|pulse|analog|logic_box|state_box "
+                    "(default box for int, analog for real, string_box for string), "
+                    "format=hex|dec (box, state_box), aggregation=average|max|sum (box, analog), "
+                    "message=TEXT (logic_box), "
+                    "labels=VALUE=NAME[@COLOR],... (state_box, NAME - for an inactive line). "
+                    "Example: --vcd-trace=kernel/id:gui=kernels/id:display=state_box:labels=0=-,1=conv@green")
 
             parser.add_argument("--gv-opt", dest="gv_opts", default=[], action="append",
                 help="Set a gvsoc config option (format: path/to/key=value, e.g. events/traces/my_trace/type=int)")

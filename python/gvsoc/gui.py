@@ -137,6 +137,50 @@ class DisplayStateBox(object):
             out.append(entry)
         return { 'type': 'state_box', 'format': self.format, 'labels': out }
 
+def display_build(display_type: str, format: str=None, aggregation: str=None, message: str=None,
+        labels: dict=None):
+    """Build a display from its type name and options, as given on the command line.
+
+    display_type is one of box, string_box, string, pulse, analog, logic_box or state_box.
+    The options which do not apply to the display type are rejected.
+    """
+    options = { 'format': format, 'aggregation': aggregation, 'message': message,
+        'labels': labels }
+    allowed = {
+        'box': ['format', 'aggregation'],
+        'string_box': [],
+        'string': [],
+        'pulse': [],
+        'analog': ['aggregation'],
+        'logic_box': ['message'],
+        'state_box': ['labels', 'format'],
+    }
+    if display_type not in allowed:
+        raise RuntimeError(f'Unknown display type: {display_type} (known: '
+            f'{", ".join(allowed.keys())})')
+    for name, value in options.items():
+        if value is not None and name not in allowed[display_type]:
+            raise RuntimeError(f'Display option {name} does not apply to {display_type}')
+
+    if display_type == 'box':
+        return DisplayBox(format=format if format is not None else 'hex', aggregation=aggregation)
+    elif display_type == 'string_box':
+        return DisplayStringBox()
+    elif display_type == 'string':
+        return DisplayString()
+    elif display_type == 'pulse':
+        return DisplayPulse()
+    elif display_type == 'analog':
+        return DisplayAnalog(aggregation=aggregation if aggregation is not None else 'average')
+    elif display_type == 'logic_box':
+        if message is None:
+            raise RuntimeError('Display logic_box needs a message')
+        return DisplayLogicBox(message)
+    else:
+        if labels is None:
+            raise RuntimeError('Display state_box needs labels')
+        return DisplayStateBox(labels, format=format if format is not None else 'hex')
+
 def get_comp_path(comp, inc_top=False, child_path=None):
     if os.environ.get('USE_GVRUN2') is not None:
         return '/' + comp.get_path(child_path=child_path)
