@@ -644,10 +644,14 @@ class Runner():
 
                 if args.gui:
 
-                    # SystemC-backed targets need the SystemC-linked GUI build.
+                    # SystemC-backed targets need the SystemC-linked GUI build. The GUI
+                    # runs the profile engine, or the debug one when debug mode is asked
+                    # on the command line (needed for memcheck).
                     gui3_bin = 'gvsoc-gui3-sc' \
                         if self.full_config.get('**/require_systemc') is not None \
                         else 'gvsoc-gui3'
+                    if args.debug_mode:
+                        gui3_bin += '-debug'
 
                     command = stub + [gui3_bin,
                         '-v ' + self.gvsoc_config_path,

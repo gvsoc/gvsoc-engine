@@ -747,7 +747,14 @@ vp::TraceEngine::TraceEngine(js::Config *config)
         this->trace_format = TRACE_FORMAT_LONG;
     }
 
+#ifdef VP_MEMCHECK_ACTIVE
     this->memcheck_enabled = config->get("memcheck")->get_bool();
+#else
+    // Memcheck needs the debug engine and models (VP_MEMCHECK_ACTIVE), the other flavours only
+    // have parts of it, so it is kept disabled there (e.g. the profile GUI tells the user to
+    // relaunch in debug mode).
+    this->memcheck_enabled = false;
+#endif
 }
 
 void vp::TraceEngine::init(vp::Component *top)

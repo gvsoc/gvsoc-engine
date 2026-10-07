@@ -301,28 +301,25 @@ vp::Component *vp::Component::load_component(js::Config *config, js::Config *gv_
         module_name = "utils.composite_impl";
     }
 
+    // Models must be of the flavour of this engine library, whatever the debug/profile/asserts
+    // modes of the configuration say: each model flavour is linked with its own engine library,
+    // so loading another flavour would bring a second engine library into the process, and models
+    // (which only export gv_new) would mix the definitions of both. The flavour is the one this
+    // library is compiled for.
 #ifdef __M32_MODE__
-    if (gv_config->get_child_bool("debug-mode"))
-    {
-        module_name = "debug_m32." + module_name;
-    }
-    else
-    {
-        module_name = "m32." + module_name;
-    }
+#ifdef VP_MEMCHECK_ACTIVE
+    module_name = "debug_m32." + module_name;
 #else
-    if (gv_config->get_child_bool("debug-mode"))
-    {
-        module_name = "debug." + module_name;
-    }
-    else if (gv_config->get_child_bool("profile-mode"))
-    {
-        module_name = "profile." + module_name;
-    }
-    else if (gv_config->get_child_bool("asserts-mode"))
-    {
-        module_name = "asserts." + module_name;
-    }
+    module_name = "m32." + module_name;
+#endif
+#else
+#if defined(VP_MEMCHECK_ACTIVE)
+    module_name = "debug." + module_name;
+#elif defined(CONFIG_GVSOC_EVENT_ACTIVE)
+    module_name = "profile." + module_name;
+#elif defined(VP_ASSERT_ACTIVE)
+    module_name = "asserts." + module_name;
+#endif
 #endif
 
 
