@@ -167,8 +167,7 @@ if(${BUILD_PROFILE})
         )
 
     # TODO VP_TRACE_ACTIVE should be removed as soon as traces have been switch to events
-    target_compile_definitions(gvsoc_profile PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
-    target_compile_options(gvsoc_profile PRIVATE -UNDEBUG)
+    target_compile_definitions(gvsoc_profile PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1)
 
     add_executable(gvsoc_launcher_profile "src/main.cpp")
     target_link_libraries(gvsoc_launcher_profile PRIVATE gvsoc_profile z pthread ${CMAKE_DL_LIBS})
@@ -179,13 +178,12 @@ if(${BUILD_PROFILE})
         INCLUDES DESTINATION include
         )
     # TODO VP_TRACE_ACTIVE should be removed as soon as traces have been switch to events
-    target_compile_definitions(gvsoc_launcher_profile PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
-    target_compile_options(gvsoc_launcher_profile PRIVATE -UNDEBUG)
+    target_compile_definitions(gvsoc_launcher_profile PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1)
 
     # SystemC-linked variant, selected by gvrun for SystemC targets.
     if(DEFINED ENV{SYSTEMC_HOME})
         add_executable(gvsoc_launcher_profile_sc "src/main.cpp" "src/systemc_driver.cpp")
-        target_compile_options(gvsoc_launcher_profile_sc PRIVATE -DVP_USE_SYSTEMC=1 -UNDEBUG)
+        target_compile_options(gvsoc_launcher_profile_sc PRIVATE -DVP_USE_SYSTEMC=1)
         target_include_directories(gvsoc_launcher_profile_sc PRIVATE $ENV{SYSTEMC_HOME}/include)
         target_link_directories(gvsoc_launcher_profile_sc PRIVATE $ENV{SYSTEMC_HOME}/lib64/)
         target_link_libraries(gvsoc_launcher_profile_sc PRIVATE systemc gvsoc_profile z pthread ${CMAKE_DL_LIBS})
@@ -196,7 +194,7 @@ if(${BUILD_PROFILE})
             INCLUDES DESTINATION include
             )
         # TODO VP_TRACE_ACTIVE should be removed as soon as traces have been switch to events
-        target_compile_definitions(gvsoc_launcher_profile_sc PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+        target_compile_definitions(gvsoc_launcher_profile_sc PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1)
     endif()
 endif()
 
@@ -215,7 +213,7 @@ if(${BUILD_DEBUG})
         RUNTIME DESTINATION bin
         INCLUDES DESTINATION include
         )
-    target_compile_definitions(gvsoc_debug PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+    target_compile_definitions(gvsoc_debug PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
     target_compile_options(gvsoc_debug PRIVATE -UNDEBUG)
 
     add_executable(gvsoc_launcher_debug "src/main.cpp")
@@ -226,7 +224,7 @@ if(${BUILD_DEBUG})
         RUNTIME DESTINATION bin
         INCLUDES DESTINATION include
         )
-    target_compile_definitions(gvsoc_launcher_debug PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+    target_compile_definitions(gvsoc_launcher_debug PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
     target_compile_options(gvsoc_launcher_debug PRIVATE -UNDEBUG)
 
     # SystemC-linked variant, selected by gvrun for SystemC targets.
@@ -242,7 +240,7 @@ if(${BUILD_DEBUG})
             RUNTIME DESTINATION bin
             INCLUDES DESTINATION include
             )
-        target_compile_definitions(gvsoc_launcher_debug_sc PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+        target_compile_definitions(gvsoc_launcher_debug_sc PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
     endif()
 endif()
 
@@ -256,7 +254,7 @@ if(${BUILD_DEBUG_M32})
         ARCHIVE DESTINATION lib
         INCLUDES DESTINATION include
         )
-    target_compile_definitions(gvsoc_debug_m32 PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
+    target_compile_definitions(gvsoc_debug_m32 PRIVATE -DCONFIG_GVSOC_EVENT_ACTIVE=1 -DVP_TRACE_ACTIVE=1 -DVP_MEMCHECK_ACTIVE=1 -DCONFIG_GVSOC_STATS_ACTIVE=1 -DVP_ASSERT_ACTIVE=1)
     target_compile_options(gvsoc_debug_m32 PRIVATE -m32 -D__M32_MODE__ -UNDEBUG)
     target_link_options(gvsoc_debug_m32 PRIVATE "-m32")
 endif()
