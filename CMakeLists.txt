@@ -204,6 +204,11 @@ if (NOT APPLE)
     # SCHEREMO: DPI is not supported on anything but Linux anyway / no EDA tools on Apple
     add_subdirectory(dpi-wrapper)
 endif()
+
+# The model config headers (<model/path>/<name>_config.hpp) are generated in this
+# binary dir. The engine libraries export it, so that every model linking them finds
+# them whatever the build layout.
+set(GVSOC_ENGINE_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR})
 add_subdirectory(engine)
 
 set(is_first true)

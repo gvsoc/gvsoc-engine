@@ -37,7 +37,7 @@ set(GVSOC_ENGINE_CXX_SRCS
     "src/stats.cpp"
     )
 
-set(GVSOC_ENGINE_INC_DIRS "include")
+set(GVSOC_ENGINE_INC_DIRS "include" "$<BUILD_INTERFACE:${GVSOC_ENGINE_GEN_DIR}>")
 
 # ==================
 # Optimized launcher
