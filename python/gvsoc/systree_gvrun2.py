@@ -27,6 +27,7 @@ from importlib import import_module
 import gvrun.target
 import gvsoc.gui
 import hashlib
+import gvsoc.generated_sources
 import rich.table
 from gvrun.runtime import is_runtime_annotation
 from gvrun.parameter import TargetParameter
@@ -113,7 +114,7 @@ def get_generated_component(sources, cflags, libs):
         # We also put first source code in the name so that the user can understand a bit
         # what is being compiled.
         # Remove characters which prevent cmake from compiling
-        template_name = sources[0].replace('/', '_').replace('.', '_')
+        template_name = gvsoc.generated_sources.component_label(sources[0])
         comp_name = f'{template_name}_{name_hash}'
 
         # Check if this collides
@@ -426,8 +427,11 @@ class Component(gvrun.target.SystemTreeNode):
         sources : list
             List of source files to be added. Their path can be relative, in which case they will
             be searched from the platform target directories.
+            A bare file name found next to the Python file calling this method is taken from
+            there, so that two directories can use the same file names.
         """
-        self.sources += sources
+        self.sources += gvsoc.generated_sources.qualify_sources(
+            sources, sys._getframe(1).f_code.co_filename)
 
     def add_c_flags(self, flags):
         """Add C flags.
