@@ -1128,7 +1128,8 @@ else:
                         kind, opts = 'sync_only', {}
 
                 bridge_name = f'{binding[0].name}_{binding[1]}_clkbridge'
-                bridge = clock_bridges.make(kind, parent=self, name=bridge_name, **opts)
+                bridge = clock_bridges.make(kind, parent=self, name=bridge_name,
+                    signature=master_sig, **opts)
 
                 after_clock.append([binding[0], binding[1], bridge, 'input',
                                     binding[4], None,

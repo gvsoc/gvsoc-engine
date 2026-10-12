@@ -21,7 +21,8 @@ Registry of clock-domain-crossing bridge IP kinds for io_v2 bindings.
 A "kind" is a string tag that the systree binding pass uses to pick which
 bridge component to splice in when a v2 master and its bound slave resolve
 to different clock sources. Each kind maps to a factory ``(parent, name,
-**opts) -> Component`` that instantiates the corresponding wrapper.
+signature, **opts) -> Component`` that instantiates the corresponding wrapper,
+``signature`` being the io_v2 signature of the crossing.
 
 System designers can:
 
@@ -44,23 +45,24 @@ _REGISTRY = {}
 def register(tag, factory):
     """Register a bridge kind.
 
-    ``factory`` is ``(parent, name, **opts) -> Component`` and must return a
+    ``factory`` is ``(parent, name, signature, **opts) -> Component``, with
+    ``signature`` the io_v2 signature of the crossing, and must return a
     component that exposes ``i_INPUT()`` / ``o_OUTPUT(slave)`` with an io_v2
     signature.
     """
     _REGISTRY[tag] = factory
 
 
-def make(tag, parent, name, **opts):
-    """Instantiate a registered bridge kind."""
+def make(tag, parent, name, signature, **opts):
+    """Instantiate a registered bridge kind for a crossing of the given signature."""
     if tag not in _REGISTRY:
         raise RuntimeError(
             f"Unknown clock-bridge kind '{tag}'. "
             f"Registered: {sorted(_REGISTRY)}")
-    return _REGISTRY[tag](parent, name, **opts)
+    return _REGISTRY[tag](parent, name, signature, **opts)
 
 
-def _sync_only_factory(parent, name, **opts):
+def _sync_only_factory(parent, name, signature, **opts):
     # Lazy import so the registry can be populated without loading the
     # bridge wrapper at module import time.
     from utils.io_v2_clock_bridge import IoV2ClockBridge
@@ -70,27 +72,27 @@ def _sync_only_factory(parent, name, **opts):
     return IoV2ClockBridge(parent, name)
 
 
-def _shared_clock_factory(parent, name, **opts):
+def _shared_clock_factory(parent, name, signature, **opts):
     # Two domains driven by the same clock (shared edges, no synchronizer):
     # a one-cycle register slice, see utils.io_v2_shared_clock_bridge.
     from utils.io_v2_shared_clock_bridge import IoV2SharedClockBridge
     if opts:
         raise RuntimeError(
             f"'shared_clock' clock bridge takes no options, got {sorted(opts)}")
-    return IoV2SharedClockBridge(parent, name)
+    return IoV2SharedClockBridge(parent, name, signature=signature)
 
 
-def _cdc_2phase_beh_factory(parent, name, **opts):
+def _cdc_2phase_beh_factory(parent, name, signature, **opts):
     from utils.io_v2_clock_bridge import IoV2Cdc2PhaseBeh
     return IoV2Cdc2PhaseBeh(parent, name, **opts)
 
 
-def _cdc_fifo_gray_beh_factory(parent, name, **opts):
+def _cdc_fifo_gray_beh_factory(parent, name, signature, **opts):
     from utils.io_v2_clock_bridge import IoV2CdcFifoGrayBeh
     return IoV2CdcFifoGrayBeh(parent, name, **opts)
 
 
-def _cdc_fifo_2phase_beh_factory(parent, name, **opts):
+def _cdc_fifo_2phase_beh_factory(parent, name, signature, **opts):
     from utils.io_v2_clock_bridge import IoV2CdcFifo2PhaseBeh
     return IoV2CdcFifo2PhaseBeh(parent, name, **opts)
 
