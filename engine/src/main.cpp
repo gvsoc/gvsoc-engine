@@ -20,6 +20,8 @@
  */
 
 #include <gv/gvsoc.hpp>
+#include <chrono>
+#include <stdlib.h>
 #include <dlfcn.h>
 #include <string.h>
 #include <stdio.h>
@@ -83,12 +85,24 @@ int main(int argc, char *argv[])
     }
 
     gvsoc->start();
+
+    // GVSOC_SIMSPEED set: report the host time spent simulating (from run to
+    // the end of the simulation, without the loading of the models) and the
+    // simulated time, for simulation speed measurements.
+    bool simspeed = getenv("GVSOC_SIMSPEED") != NULL;
+    auto run_start = std::chrono::steady_clock::now();
+
     gvsoc->run();
 
     gvsoc->quit(0);
     int retval = gvsoc->join();
 
-    gvsoc->stop();
+    double host_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count();
+    int64_t sim_ps = gvsoc->stop();
+    if (simspeed)
+    {
+        fprintf(stderr, "[gvsoc simspeed] sim_time_ps=%lld host_time_s=%.6f\n", (long long)sim_ps, host_s);
+    }
     gvsoc->close();
 
     return retval;
