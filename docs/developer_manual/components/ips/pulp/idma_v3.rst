@@ -72,7 +72,10 @@ the testsets are derived from:
   push in the cycle it is popped. Realignment is the lane indexing:
   ``read_shift = src % width`` on the way in, ``write_shift = -(dst %
   width)`` on the way out, so a write beat needs bytes of two read beats
-  when the two ends are misaligned (one extra cycle).
+  when the two ends are misaligned (one extra cycle). The bytes of a beat
+  are always one run (from the split offset on the first beat, up to the
+  tailer on the last one), passed as a first byte and a count, so any
+  power-of-two ``width`` works (SoftHier uses 512 bytes).
 - **AXI write**: data beats are independent of the address phase, one per
   cycle when the buffer holds the strobed bytes; the burst response (one
   data-less ack in io_v2) retires the burst. With the RAW coupler
@@ -167,8 +170,9 @@ Tests
   legalizer, RAW coupler) between two memories behind a beat router:
   aligned and page-crossing bursts, decoupled sides, misalignment, 2D, 32
   KiB with three bursts in flight, request FIFO back-pressure, zero length,
-  memory latency, the 8-byte width. Cycle references follow the rules above
-  with tolerances of 2-4 cycles. The :class:`SnitchDmaV3` cases drive the
+  memory latency, the 8-byte width, the 512-byte width (SoftHier: aligned,
+  misaligned with shifts beyond 64 lanes, page cut, 2D). Cycle references
+  follow the rules above with tolerances of 2-4 cycles. The :class:`SnitchDmaV3` cases drive the
   same transfers through the offload wire.
 - ``gvsoc/pulp/tests/idma_v3_cluster``: :class:`ClusterDmaV3` between a TCDM
   behind an untimed crossbar stand-in (four narrow ports) and an L2 behind a

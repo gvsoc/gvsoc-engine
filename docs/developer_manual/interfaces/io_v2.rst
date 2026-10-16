@@ -537,6 +537,13 @@ It carries the same :cpp:enum:`vp::IoRetryChannel` and obeys the same
 **synchronous re-send** rule: the producer re-submits its held beat
 inside the ``resp_retry`` callback, same cycle, never deferred.
 
+Read data and write acks are independent response channels, like AXI
+``R`` and ``B``: a producer that returns both holds a denied beat per
+channel and keeps the other channel flowing, and the consumer names the
+channel it frees in ``resp_retry()``. Stopping the write acks behind a
+held read beat can deadlock: a master which stalls ``R`` until its
+writes drain never gets the ``B`` that frees them.
+
 A producer that can be denied registers a ``resp_retry`` handler as
 the optional second argument of the ``IoSlave`` constructor
 (``vp::IoSlave in{ &MyComp::req, &MyComp::resp_retry }``); it defaults
@@ -1249,7 +1256,9 @@ inline-only: it answers each request with a single-beat response in any of
 three forms — inline ``IO_REQ_DONE``, async ``IO_REQ_GRANTED`` + one
 ``resp()``, or ``IO_REQ_DENIED`` + ``retry()`` — so the adapter keeps the
 read sub-read pipeline (beat-sized sub-reads paced one per cycle), the
-async/deny machinery and request- and response-path back-pressure.
+async/deny machinery and request- and response-path back-pressure (one
+held beat per response channel: a refused read beat does not stop the
+write acks).
 
 Writes follow the per-burst ack contract: the adapter consumes the
 master's write beats, forwards **each beat** as its own single-req request
