@@ -105,4 +105,4 @@ register('cdc_fifo_2phase_beh', _cdc_fifo_2phase_beh_factory)
 
 # Note: cdc_*_rtl kinds are calibration-only and not registered here.
 # Tests that need them register locally β€” see
-# gvsoc/core/tests/utils/io_v2_clkbridge/rtl_calibration/__init__.py.
+# tests/calibration/io_v2_clkbridge/rtl_calibration/__init__.py of the SDK.
