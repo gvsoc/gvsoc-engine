@@ -12,8 +12,10 @@ generic back-end.
 
 Its first user is the el1 cluster DMA (:class:`ClusterDmaV3`, two
 half-duplex OBI/AXI streams); :class:`RegDmaV3` is the single-stream
-AXI-to-AXI shape (Cheshire, voscap, the Spatz cluster DMA once it is driven
-by the xdma front-end :class:`SnitchDmaV3`).
+register-driven shape, AXI or OBI on each side (the upstream ``rw_axi``,
+``r_axi_w_obi``, ``r_obi_w_axi`` and ``rw_obi`` back-ends), and
+:class:`SnitchDmaV3` the Spatz / Snitch cluster DMA driven by the xdma
+front-end.
 
 Architecture
 ------------
@@ -107,11 +109,24 @@ Class                       RTL                                         Paramete
 ``IdmaMeNd``                request ``stream_fifo`` + ``idma_nd_midend``  ``req_fifo_depth``, ``nb_dims``
 ``IdmaLegalizer``           ``idma_legalizer_*``                        page rule from the managers
 ``IdmaBackend``             ``idma_backend`` FIFOs + ``idma_dataflow_element``  ``num_ax_in_flight``, ``meta_fifo_depth``, ``buffer_depth``, ``width``
-``IdmaAxiRead``             ``idma_axi_read`` + AR fall-through         ``burst_len``
-``IdmaAxiWrite``            ``idma_axi_write`` (+ ``idma_channel_coupler``)  ``burst_len``, ``raw_coupling``
-``IdmaObiPortGroup``        ``mem_to_banks`` + ``obi_mux`` + rready converter  ports, port width, address mask
+``IdmaAxiRead``             ``idma_axi_read`` + AR fall-through         ``IdmaAxiConfig``
+``IdmaAxiWrite``            ``idma_axi_write`` (+ ``idma_channel_coupler``)  ``IdmaAxiConfig``, ``raw_coupling``
+``IdmaObiPortGroup``        ``mem_to_banks`` + ``obi_mux`` + rready converter  ``IdmaObiConfig`` (port width, address width)
 ``IdmaObiRead`` / ``Write`` ``idma_obi_read`` / ``idma_obi_write``      --
 ==========================  ==========================================  ================================
+
+Configuration
+-------------
+
+The DMA configurations hold the back-end parameters (``data_width``, FIFO
+and buffer depths, ``raw_coupling``) and embed one block per protocol for
+the rest: ``IdmaAxiConfig`` (burst length) and ``IdmaObiConfig`` (port
+width, address width; an access spans ``data_width / port_width`` ports).
+A side whose protocol is configurable, like both sides of
+:class:`RegDmaV3`, is an ``IdmaPortConfig`` (``protocol`` plus both
+blocks), and ``be/idma_manager_factory`` builds its manager. A new protocol
+adds its config class, a field of ``IdmaPortConfig`` and a case of the
+factory; the DMA configurations do not change.
 
 io_v2 mapping
 -------------
@@ -149,7 +164,7 @@ Generators
    :show-inheritance:
 
 .. autoclass:: ips.pulp.idma_v3.reg_dma.RegDmaV3
-   :members: i_INPUT, o_AXI_READ, o_AXI_WRITE, o_IRQ, o_BUSY
+   :members: i_INPUT, o_AXI_READ, o_AXI_WRITE, o_OBI_READ, o_OBI_WRITE, o_IRQ, o_BUSY
    :show-inheritance:
 
 .. autoclass:: ips.pulp.idma_v3.reg_dma_config.RegDmaV3Config
@@ -162,10 +177,19 @@ Generators
 .. autoclass:: ips.pulp.idma_v3.snitch_dma_config.SnitchDmaV3Config
    :show-inheritance:
 
+.. autoclass:: ips.pulp.idma_v3.protocol_config.IdmaAxiConfig
+   :show-inheritance:
+
+.. autoclass:: ips.pulp.idma_v3.protocol_config.IdmaObiConfig
+   :show-inheritance:
+
+.. autoclass:: ips.pulp.idma_v3.protocol_config.IdmaPortConfig
+   :show-inheritance:
+
 Tests
 -----
 
-- ``gvsoc/pulp/tests/idma_v3_axi``: :class:`RegDmaV3` configured like the
+- ``tests/functional/models/idma_v3_axi``: :class:`RegDmaV3` configured like the
   Spatz cluster DMA (512-bit, 3 bursts in flight, 4 KiB pages, coupled
   legalizer, RAW coupler) between two memories behind a beat router:
   aligned and page-crossing bursts, decoupled sides, misalignment, 2D, 32
@@ -173,8 +197,9 @@ Tests
   memory latency, the 8-byte width, the 512-byte width (SoftHier: aligned,
   misaligned with shifts beyond 64 lanes, page cut, 2D). Cycle references
   follow the rules above with tolerances of 2-4 cycles. The :class:`SnitchDmaV3` cases drive the
-  same transfers through the offload wire.
-- ``gvsoc/pulp/tests/idma_v3_cluster``: :class:`ClusterDmaV3` between a TCDM
+  same transfers through the offload wire, the OBI cases put one side or
+  both on OBI ports in front of an untimed memory.
+- ``tests/functional/models/idma_v3_cluster``: :class:`ClusterDmaV3` between a TCDM
   behind an untimed crossbar stand-in (four narrow ports) and an L2 behind a
   beat router: both streams, L1 to L1, unaligned ends, 2D and 3D, zero
   length, queue back-pressure, the two read managers sharing the read
