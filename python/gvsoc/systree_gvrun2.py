@@ -155,6 +155,26 @@ class SlaveItf():
         self.itf_name = itf_name
         self.signature = signature
 
+    def tie(self, value):
+        """Tie this wire input to a constant, like an input tied to '0 or '1 in
+        the RTL.
+
+        A tie cell is added next to the component and drives the value at every
+        reset release.
+
+        Parameters
+        ----------
+        value : int or bool
+            Constant driven on the input.
+        """
+        from utils.tie import Tie
+        comp = self.component
+        if comp.parent is None:
+            raise RuntimeError(f'Cannot tie an input of the top component ({self.itf_name})')
+        cell = Tie(comp.parent, f'{comp.name}_{self.itf_name}_tie', value=value,
+            signature=self.signature)
+        cell.o_OUT(self)
+
 
 class Port():
 

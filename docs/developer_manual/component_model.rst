@@ -196,6 +196,20 @@ Hereafter you can see the exemple of a memory.
             """
             return gvsoc.systree.SlaveItf(self, 'input', signature='io')
 
+Tying a wire input to a constant
+################################
+
+Like an RTL input tied to ``'0`` or ``'1``, a wire input which no component drives can be
+tied to a constant with ``tie()`` on its slave interface. A tie cell (``utils/tie.py``) is
+added next to the component and sends the value at every reset release, so the input must
+keep the last value it received and not reset it itself. The ``wire<bool>``,
+``wire<int>``, ``wire<uint32_t>`` and ``wire<uint64_t>`` signatures are supported.
+
+.. code-block:: python
+
+    # Prefetcher of the L0 disabled, as when the platform ties enable_prefetching_i to '0
+    l0.i_ENABLE_PREFETCHING().tie(False)
+
 
 
 C++ component model
