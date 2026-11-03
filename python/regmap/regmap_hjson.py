@@ -29,7 +29,9 @@ from reggen.window import Window
 
 from typing import List, TextIO, Dict, Any, Optional
 
-def import_hjson(regmap, path, registers=[]):
+def import_hjson(regmap, path, registers=[], use_regwidth=False):
+    """use_regwidth: the registers get the width of the block (regwidth),
+    so that their whole span is accessible, instead of the default one."""
 
     with open(path, "rt") as fh:
 
@@ -42,20 +44,21 @@ def import_hjson(regmap, path, registers=[]):
         # Handle the case where there's just one interface.
         if len(block.reg_blocks) == 1:
             rb = next(iter(block.reg_blocks.values()))
-            gen_reg_block(regmap, rb, block.name, block.regwidth)
+            gen_reg_block(regmap, rb, block.name, block.regwidth, use_regwidth=use_regwidth)
             return 0
 
         # Handle the case where there is more than one device interface and,
         # correspondingly, more than one reg block.
         for iface_name, rb in block.reg_blocks.items():
             assert iface_name
-            gen_reg_block(regmap, rb, block.name, block.regwidth, iface_name)
+            gen_reg_block(regmap, rb, block.name, block.regwidth, iface_name,
+                use_regwidth=use_regwidth)
 
         return 0
 
 
-def gen_reg_block(regmap, rb: RegBlock, comp: str, width: int, iface_name: Optional[str] = None
-) -> None:
+def gen_reg_block(regmap, rb: RegBlock, comp: str, width: int, iface_name: Optional[str] = None,
+    use_regwidth: bool = False) -> None:
     if len(rb.entries) == 0:
         raise RuntimeError('This interface does not expose any registers.')
 
@@ -65,18 +68,19 @@ def gen_reg_block(regmap, rb: RegBlock, comp: str, width: int, iface_name: Optio
     # Generate detailed entries.
     for x in rb.entries:
         if isinstance(x, Register):
-            gen_register(regmap, x, comp, width)
+            gen_register(regmap, x, comp, width, use_regwidth)
         elif isinstance(x, MultiRegister):
-            gen_multiregister(regmap, x, comp, width)
+            gen_multiregister(regmap, x, comp, width, use_regwidth)
         else:
             assert isinstance(x, Window)
             raise RuntimeError("Unsupported Window")
 
 
-def gen_register(regmap, reg: Register, comp: str, width: int) -> None:
+def gen_register(regmap, reg: Register, comp: str, width: int, use_regwidth: bool = False) -> None:
 
     regmap_reg = regmap.add_register(
-        rmap.Register(name=reg.name, desc=reg.desc, offset=reg.offset))
+        rmap.Register(name=reg.name, desc=reg.desc, offset=reg.offset,
+            width=width if use_regwidth else None))
 
     for regfield in reg.fields:
 
@@ -92,13 +96,14 @@ def multireg_is_compact(mreg: MultiRegister, width: int) -> bool:
     # Note that validation guarantees that compacted multiregs only ever have one field.
     return mreg.compact and (mreg.reg.fields[0].bits.msb + 1) <= width // 2
 
-def gen_multiregister(regmap, mreg: MultiRegister, comp: str, width: int) -> None:
+def gen_multiregister(regmap, mreg: MultiRegister, comp: str, width: int,
+    use_regwidth: bool = False) -> None:
 
     # Check whether this is a compacted multireg, in which case we cannot use
     # the general definition of the first register as an example for all other instances.
     if multireg_is_compact(mreg, width):
         for reg in mreg.regs:
-            gen_register(regmap, reg, comp, width)
+            gen_register(regmap, reg, comp, width, use_regwidth)
         return
 
     # The general definition of the registers making up this multiregister block.
@@ -106,4 +111,4 @@ def gen_multiregister(regmap, mreg: MultiRegister, comp: str, width: int) -> Non
 
     # For now, generate all multiregs as simple registers
     for reg in mreg.regs:
-        gen_register(regmap, reg, comp, width)
+        gen_register(regmap, reg, comp, width, use_regwidth)
