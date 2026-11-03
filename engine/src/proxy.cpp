@@ -35,6 +35,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <regex>
 #include <sys/types.h>
@@ -82,6 +83,12 @@ void gv::GvProxy::listener(void)
         }
 
         this->logger.info("Client connected, creating new session\n");
+
+        // A reply is often made of several small writes (a mem read sends its
+        // header, data and status): with Nagle, each one after the first waits
+        // for the client's delayed ACK, ~40 ms per command.
+        int one = 1;
+        setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
         this->sockets.push_back(client_fd);
         std::unique_lock<std::mutex> lock(this->mutex);

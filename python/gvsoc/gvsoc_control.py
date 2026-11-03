@@ -261,6 +261,10 @@ class Proxy(object):
         self.lock = threading.Lock()
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # A command is often sent in several writes (a mem write sends its
+        # header, then the data): with Nagle, each one after the first waits
+        # for the engine's delayed ACK, ~40 ms per command.
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.socket.connect((host, port))
 
         self.reader = self._Socket_proxy_reader_thread(self.socket)
