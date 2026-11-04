@@ -119,7 +119,8 @@
 //     write on a non-beat flow), which is not the producer's to free and
 //     travels back itself. io_v2_write_ack() implements both cases; the
 //     initiator must never correlate by object identity either way.
-//   - Fields: opcode WRITE; data == NULL (mandatory); is_first = is_last =
+//   - Fields: opcode WRITE; data == NULL (mandatory, but on a master-owned
+//     object, which keeps its master's buffer); is_first = is_last =
 //     true; burst_id = the id carried by the burst's beats (routers remap and
 //     restore it exactly as for read beats); initiator = copied from the
 //     beats — all beats of one burst MUST carry the same initiator; status =
@@ -536,10 +537,11 @@ inline void IoReq::free()
  * beat (see "The write ack" above). A pool-backed beat goes back to its
  * pool and the ack is a dedicated request from the size-0 pool; a
  * master-owned object (no allocator back-pointer, a classic round-trip
- * write) must travel back itself, so it is prepared in place. Either way
- * the result carries the burst's burst_id and initiator, opcode WRITE,
- * data NULL and is_first = is_last = true; the caller sets addr, size,
- * status and any timing annotation.
+ * write) must travel back itself, so it is prepared in place, keeping its
+ * data pointer: its master may reuse it with the same buffer. Either way
+ * the result carries the burst's burst_id and initiator, opcode WRITE and
+ * is_first = is_last = true, and a dedicated ack has data NULL; the caller
+ * sets addr, size, status and any timing annotation.
  */
 inline IoReq *io_v2_write_ack(IoReq *beat)
 {
@@ -550,10 +552,10 @@ inline IoReq *io_v2_write_ack(IoReq *beat)
     {
         beat->free();
         ack = IoReqAllocator::get(0)->alloc();
+        ack->set_data(nullptr);
     }
     ack->prepare();
     ack->set_is_write(true);
-    ack->set_data(nullptr);
     ack->is_first = true;
     ack->is_last = true;
     ack->burst_id = burst_id;
