@@ -763,8 +763,12 @@ class Runner():
 
                     run = pexpect.spawn(' '.join(command), encoding='utf-8', logfile=sys.stdout,
                         codec_errors='replace')
-                    match = run.expect(['Opened proxy on socket ', pexpect.EOF], timeout=None)
+                    match = run.expect([r'Opened proxy on socket (\d+)\r?\n', pexpect.EOF],
+                        timeout=None)
                     if match == 0:
+                        # Connect to the port gvsoc opened: the GUI (--gui) opens its proxy
+                        # on a port of its own, not on the configured one
+                        port = int(run.match.group(1))
                         break
 
                     port = port + 1
@@ -777,6 +781,7 @@ class Runner():
                 gv_thread.start()
 
                 # And call user script with gvsoc proxy
+                proxy = None
                 try:
                     proxy = gvsoc.gvsoc_control.Proxy('localhost', port, cosim=self.cosim)
 
@@ -797,7 +802,8 @@ class Runner():
                 except:
                     traceback.print_exc()
                     gv_thread.kill = True
-                    proxy.close()
+                    if proxy is not None:
+                        proxy.close()
                     gv_thread.join()
                     retval = 1
 
