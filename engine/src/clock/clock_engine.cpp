@@ -659,6 +659,18 @@ std::string vp::ClockEngine::handle_command(gv::GvProxy *proxy, FILE *req_file, 
             this->get_period(), this->get_frequency(), this->get_cycles());
         return std::string(buffer);
     }
+    else if (args.size() == 2 && args[0] == "set_frequency")
+    {
+        // As a frequency generator would: applied at the next cycle
+        int64_t frequency = strtoll(args[1].c_str(), NULL, 0);
+        if (frequency <= 0)
+        {
+            return "invalid frequency";
+        }
+        this->sync();
+        this->apply_frequency(frequency);
+        return "ok";
+    }
 
     return "";
 }

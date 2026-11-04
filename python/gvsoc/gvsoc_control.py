@@ -488,6 +488,20 @@ class Proxy(object):
             domains.append(info)
         return domains
 
+    def set_clock_frequency(self, path: str, frequency: int):
+        """Change the frequency of a clock domain (a path of get_clock_domains).
+
+        The domain switches at its next cycle, as with a frequency generator.
+        """
+        # Paths of get_clock_domains start at the top, which get_component does not name
+        component = self._get_component(path.lstrip('/'))
+        if int(component, 0) == 0:
+            raise RuntimeError('no clock domain at %s' % path)
+        result = self._send_cmd('component %s set_frequency %d' % (component, frequency))
+        result = result.replace('\n', '')
+        if result != 'ok':
+            raise RuntimeError('set_clock_frequency %s %d: %s' % (path, frequency, result))
+
 
     def get_binaries(self):
         """Get the ELF binaries the engine has registered.
