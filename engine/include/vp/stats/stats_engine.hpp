@@ -132,6 +132,17 @@ namespace vp
          */
         int64_t get_duration_ps() const;
 
+        /**
+         * @brief Get the current values of the stats, while the simulation runs.
+         *
+         * Brings the stats up to date as a dump does, without ending the stats
+         * window. The caller must have synchronized the clock domains.
+         *
+         * @param filter Regular expression the stat paths must contain (all if empty).
+         * @return "path=value" for each stat, separated by '|', in raw format.
+         */
+        std::string query(const std::string &filter);
+
 
 
     // public for dump helpers

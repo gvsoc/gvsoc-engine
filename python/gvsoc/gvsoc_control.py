@@ -488,6 +488,27 @@ class Proxy(object):
             domains.append(info)
         return domains
 
+    def get_stats(self, filter: str = ''):
+        """Get the current values of the statistics (gvsoc run with --stats).
+
+        filter is a regular expression the stat paths must contain, without
+        spaces. Returns a dict from stat path to value (int, or float for
+        derived stats such as percentages).
+        """
+        result = self._send_cmd('stats %s' % filter if filter else 'stats').replace('\n', '')
+        if result.startswith('error='):
+            raise RuntimeError(result[len('error='):])
+        stats = {}
+        for entry in result.split('|'):
+            if '=' not in entry:
+                continue
+            path, value = entry.rsplit('=', 1)
+            try:
+                stats[path] = int(value)
+            except ValueError:
+                stats[path] = float(value)
+        return stats
+
     def set_clock_frequency(self, path: str, frequency: int):
         """Change the frequency of a clock domain (a path of get_clock_domains).
 

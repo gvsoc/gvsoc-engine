@@ -552,6 +552,35 @@ void gv::GvProxySession::proxy_loop()
                     fflush(reply_sock);
                     lock.unlock();
                 }
+                else if (words[0] == "stats")
+                {
+                    // Current values of the stats (--stats), optionally filtered by a regex
+                    vp::StatsEngine *stats = this->proxy->top->stats.get_engine();
+                    std::string result;
+                    if (stats == nullptr || !stats->is_enabled())
+                    {
+                        result = "error=stats are not enabled (--stats)";
+                    }
+                    else
+                    {
+                        for (auto clock : engine->get_clock_engines())
+                        {
+                            clock->sync();
+                        }
+                        try
+                        {
+                            result = stats->query(words.size() > 1 ? words[1] : "");
+                        }
+                        catch (const std::regex_error &e)
+                        {
+                            result = std::string("error=invalid filter: ") + e.what();
+                        }
+                    }
+                    std::unique_lock<std::mutex> lock(this->proxy->mutex);
+                    fprintf(reply_sock, "req=%s;msg=%s\n", req.c_str(), result.c_str());
+                    fflush(reply_sock);
+                    lock.unlock();
+                }
                 else if (words[0] == "get_binaries")
                 {
                     // Return the engine's registered ELF binaries (pipe-separated) so a client can

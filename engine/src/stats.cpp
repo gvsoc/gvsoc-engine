@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cmath>
 #include <map>
+#include <regex>
 #include <vp/stats/stats_engine.hpp>
 #include <vp/stats/block_stat.hpp>
 #include <vp/block.hpp>
@@ -209,6 +210,27 @@ int64_t vp::StatsEngine::get_duration_ps() const
         return this->stop_timestamp - this->start_timestamp;
     }
     return 0;
+}
+
+
+std::string vp::StatsEngine::query(const std::string &filter)
+{
+    for (auto &cb : this->pre_dump_callbacks)
+    {
+        cb();
+    }
+
+    std::regex regex(filter);
+    std::string result;
+    for (auto &entry : this->entries)
+    {
+        if (!filter.empty() && !std::regex_search(entry.path, regex))
+            continue;
+        if (!result.empty())
+            result += "|";
+        result += entry.path + "=" + entry.stat->format_value(true);
+    }
+    return result;
 }
 
 
