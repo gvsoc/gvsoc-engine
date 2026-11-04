@@ -556,6 +556,7 @@ void vp::ClockEngine::set_frequency(vp::Block *__this, int64_t frequency)
 
 void vp::ClockEngine::change_frequency(int64_t frequency)
 {
+    this->freq = frequency;
     this->out.set_frequency(frequency);
     this->clock_trace.set(this->period);
 }
