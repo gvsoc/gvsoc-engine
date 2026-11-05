@@ -96,6 +96,18 @@ foreach(subdir ${GVSOC_EXTRA_MODULES})
     set(GAPY_TARGETS_DIR_OPT ${GAPY_TARGETS_DIR_OPT} --target-dir=${subdir})
 endforeach()
 
+# Target directories (e.g. of a test) only bring targets and the components
+# compiled from their own sources. Unlike extra modules, they are not on the
+# include path of the other generated components, which then keep the same
+# compile command and are not rebuilt and reinstalled, while other simulations
+# may be loading them, when a test builds its target in the shared build.
+set(GVSOC_TARGETS_DIRS_REAL)
+foreach(subdir ${GVSOC_TARGETS_DIRS})
+    set(GAPY_TARGETS_DIR_OPT ${GAPY_TARGETS_DIR_OPT} --target-dir=${subdir})
+    get_filename_component(subdir_real "${subdir}" REALPATH)
+    list(APPEND GVSOC_TARGETS_DIRS_REAL "${subdir_real}")
+endforeach()
+
 set(TARGET_CONFIG_DIR ${CMAKE_BINARY_DIR}/gvsoc/configs)
 file(MAKE_DIRECTORY ${TARGET_CONFIG_DIR})
 
@@ -235,9 +247,23 @@ endforeach()
 
 foreach(component ${COMPONENTS})
     string(REPLACE " " ";" SRCS_LIST "${CONFIG_SRCS_${component}}")
+
+    # Target directories holding one of the component sources
+    set(component_includes ${GVSOC_EXTRA_MODULES})
+    foreach(dir ${GVSOC_TARGETS_DIRS_REAL})
+        foreach(src ${SRCS_LIST})
+            get_filename_component(src_real "${src}" REALPATH)
+            string(FIND "${src_real}" "${dir}/" pos)
+            if(pos EQUAL 0)
+                list(APPEND component_includes "${dir}")
+                break()
+            endif()
+        endforeach()
+    endforeach()
+
     vp_model(NAME ${component}
         SOURCES "${SRCS_LIST}"
-        INCLUDES "${GVSOC_EXTRA_MODULES}"
+        INCLUDES "${component_includes}"
     )
     # Link any libraries declared from the generator via Component.add_libraries().
     if(NOT "${CONFIG_LIBS_${component}}" STREQUAL "")
