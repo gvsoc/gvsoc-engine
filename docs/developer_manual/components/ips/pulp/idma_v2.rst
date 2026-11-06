@@ -339,18 +339,3 @@ issuing. The downstream's ``retry()`` reaches the back-end's
 ``retry_meth`` callback (forwarded through the auto-inserted
 adapter when present), which clears ``denied_blocked`` and nudges
 the FSM.
-
-Tests
------
-
-End-to-end tests for the v2 iDMA live under
-``gvsoc/pulp/tests/idma_v2/``. They wire a small
-``IDmaTesterV2`` (stimulus + checker) against a
-:class:`RegDmaV2` programmed through its register front-end and
-through a configurable ``router_v2_*`` between iDMA and memory.
-
-The testset's source-of-truth is ``testset.cfg``; each case sets
-``expected_cycles`` and a tolerance, computed against the iDMA's
-beat-streaming bandwidth model. See
-``gvsoc/pulp/tests/idma_v2/test.py`` for the per-case stimulus
-specs.
