@@ -107,14 +107,18 @@ namespace vp
         /**
          * @brief Stop collecting and record end timestamp.
          *
+         * Freezes the values of all statistics: a later dump prints them as they
+         * were at the stop, whatever happened in between.
+         *
          * @param timestamp Simulation time in picoseconds.
          */
         void stop(int64_t timestamp);
 
         /**
-         * @brief Register a callback invoked before stats are dumped.
+         * @brief Register a callback invoked before the values of the stats are taken.
          *
-         * Used by clock domains to snapshot their cycle counts.
+         * Called at the stop, or at the dump if the stats were not stopped. Used by
+         * clock domains to snapshot their cycle counts.
          */
         void register_pre_dump(std::function<void()> callback);
 
@@ -136,7 +140,8 @@ namespace vp
          * @brief Get the current values of the stats, while the simulation runs.
          *
          * Brings the stats up to date as a dump does, without ending the stats
-         * window. The caller must have synchronized the clock domains.
+         * window, or returns the frozen values after a stop. The caller must
+         * have synchronized the clock domains.
          *
          * @param filter Regular expression the stat paths must contain (all if empty).
          * @return "path=value" for each stat, separated by '|', in raw format.
@@ -157,6 +162,8 @@ namespace vp
     private:
         void dump_flat(FILE *file);
         void dump_grouped(FILE *file);
+        // Value of an entry, the frozen one if the stats are stopped
+        std::string entry_value(size_t index, bool raw) const;
 
         std::vector<StatEntry> entries;
         vp::Block *top = nullptr;
@@ -167,6 +174,10 @@ namespace vp
         int64_t start_timestamp = -1;
         int64_t stop_timestamp = -1;
         bool first_dump = true;
+        // Values of the entries frozen by stop(), in the order of the entries
+        bool frozen = false;
+        std::vector<std::string> frozen_values;
+        std::vector<std::string> frozen_raw_values;  // Raw format, for query()
         std::vector<std::function<void()>> pre_dump_callbacks;
         std::vector<std::function<void()>> start_callbacks;
     };

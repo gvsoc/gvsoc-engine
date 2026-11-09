@@ -97,6 +97,23 @@ void vp::StatsEngine::register_stat(const std::string &path, StatCommon *stat, c
 {
     this->entries.push_back({path, stat, desc});
     stat->registered(this);
+    // Registered after the stop (lazily registered stats): nothing was counted in the window
+    if (this->frozen)
+    {
+        this->frozen_values.push_back(stat->format_value(this->opt_raw));
+        this->frozen_raw_values.push_back(stat->format_value(true));
+    }
+}
+
+
+std::string vp::StatsEngine::entry_value(size_t index, bool raw) const
+{
+    const std::vector<std::string> &values = raw ? this->frozen_raw_values : this->frozen_values;
+    if (this->frozen && index < values.size())
+    {
+        return values[index];
+    }
+    return this->entries[index].stat->format_value(raw);
 }
 
 
@@ -170,6 +187,9 @@ void vp::StatsEngine::start(int64_t timestamp)
 {
     this->start_timestamp = timestamp;
     this->stop_timestamp = -1;
+    this->frozen = false;
+    this->frozen_values.clear();
+    this->frozen_raw_values.clear();
 
     // Reset all stats when starting a new collection window
     for (auto &entry : this->entries)
@@ -188,6 +208,21 @@ void vp::StatsEngine::start(int64_t timestamp)
 void vp::StatsEngine::stop(int64_t timestamp)
 {
     this->stop_timestamp = timestamp;
+
+    // Take the values now: the models keep counting after the stop, and the
+    // dump can come much later
+    for (auto &cb : this->pre_dump_callbacks)
+    {
+        cb();
+    }
+    this->frozen_values.clear();
+    this->frozen_raw_values.clear();
+    for (auto &entry : this->entries)
+    {
+        this->frozen_values.push_back(entry.stat->format_value(this->opt_raw));
+        this->frozen_raw_values.push_back(entry.stat->format_value(true));
+    }
+    this->frozen = true;
 }
 
 
@@ -215,20 +250,25 @@ int64_t vp::StatsEngine::get_duration_ps() const
 
 std::string vp::StatsEngine::query(const std::string &filter)
 {
-    for (auto &cb : this->pre_dump_callbacks)
+    // After a stop, the values are the frozen ones
+    if (!this->frozen)
     {
-        cb();
+        for (auto &cb : this->pre_dump_callbacks)
+        {
+            cb();
+        }
     }
 
     std::regex regex(filter);
     std::string result;
-    for (auto &entry : this->entries)
+    for (size_t i = 0; i < this->entries.size(); i++)
     {
+        auto &entry = this->entries[i];
         if (!filter.empty() && !std::regex_search(entry.path, regex))
             continue;
         if (!result.empty())
             result += "|";
-        result += entry.path + "=" + entry.stat->format_value(true);
+        result += entry.path + "=" + this->entry_value(i, true);
     }
     return result;
 }
@@ -254,9 +294,10 @@ void vp::StatsEngine::dump_flat(FILE *file)
         fprintf(file, "  Duration:    %s\n\n", format_time_human(duration_ps).c_str());
     }
 
-    for (auto &entry : this->entries)
+    for (size_t i = 0; i < this->entries.size(); i++)
     {
-        std::string val = entry.stat->format_value(this->opt_raw);
+        auto &entry = this->entries[i];
+        std::string val = this->entry_value(i, this->opt_raw);
         fprintf(file, "  %-55s %12s", entry.path.c_str(), val.c_str());
         if (!entry.desc.empty())
             fprintf(file, "  # %s", entry.desc.c_str());
@@ -290,19 +331,20 @@ void vp::StatsEngine::dump_grouped(FILE *file)
     // Group entries by component path
     struct GroupEntry {
         std::string name;
-        StatCommon *stat;
+        std::string value;
         std::string desc;
     };
     std::map<std::string, std::vector<GroupEntry>> groups;
     std::vector<std::string> group_order;
 
-    for (auto &entry : this->entries)
+    for (size_t i = 0; i < this->entries.size(); i++)
     {
+        auto &entry = this->entries[i];
         std::string comp = get_component_path(entry.path);
         std::string name = get_stat_name(entry.path);
         if (groups.find(comp) == groups.end())
             group_order.push_back(comp);
-        groups[comp].push_back({name, entry.stat, entry.desc});
+        groups[comp].push_back({name, this->entry_value(i, this->opt_raw), entry.desc});
     }
 
     for (auto &comp : group_order)
@@ -312,8 +354,7 @@ void vp::StatsEngine::dump_grouped(FILE *file)
 
         for (auto &s : stats)
         {
-            std::string val = s.stat->format_value(this->opt_raw);
-            fprintf(file, "  %-28s %12s\n", s.name.c_str(), val.c_str());
+            fprintf(file, "  %-28s %12s\n", s.name.c_str(), s.value.c_str());
         }
 
         fprintf(file, "\n");
@@ -331,10 +372,14 @@ void vp::StatsEngine::dump(FILE *file)
         this->stop_timestamp = this->top->time.get_time();
     }
 
-    // Invoke pre-dump callbacks (e.g. clock domains snapshotting cycles)
-    for (auto &cb : this->pre_dump_callbacks)
+    // Invoke pre-dump callbacks (e.g. clock domains snapshotting cycles), unless
+    // stop() already took the values
+    if (!this->frozen)
     {
-        cb();
+        for (auto &cb : this->pre_dump_callbacks)
+        {
+            cb();
+        }
     }
 
     if (this->opt_flat)
