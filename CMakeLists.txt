@@ -85,7 +85,7 @@ endfunction()
 # GVSOC needs to be given a config file containing all the components to be compiled
 
 foreach(subdir ${GVSOC_MODULES})
-    set(GAPY_TARGETS_DIR_OPT ${GAPY_TARGETS_DIR_OPT} --target-dir=${subdir})
+    set(GVRUN_TARGETS_DIR_OPT ${GVRUN_TARGETS_DIR_OPT} --target-dir=${subdir})
 endforeach()
 
 # Extra modules are only visible to the config generation and to the generated
@@ -93,7 +93,7 @@ endforeach()
 # stable when extra modules are given (e.g. by testsuite builds), so that they
 # do not get recompiled and reinstalled.
 foreach(subdir ${GVSOC_EXTRA_MODULES})
-    set(GAPY_TARGETS_DIR_OPT ${GAPY_TARGETS_DIR_OPT} --target-dir=${subdir})
+    set(GVRUN_TARGETS_DIR_OPT ${GVRUN_TARGETS_DIR_OPT} --target-dir=${subdir})
 endforeach()
 
 # Target directories (e.g. of a test) only bring targets and the components
@@ -103,7 +103,7 @@ endforeach()
 # may be loading them, when a test builds its target in the shared build.
 set(GVSOC_TARGETS_DIRS_REAL)
 foreach(subdir ${GVSOC_TARGETS_DIRS})
-    set(GAPY_TARGETS_DIR_OPT ${GAPY_TARGETS_DIR_OPT} --target-dir=${subdir})
+    set(GVRUN_TARGETS_DIR_OPT ${GVRUN_TARGETS_DIR_OPT} --target-dir=${subdir})
     get_filename_component(subdir_real "${subdir}" REALPATH)
     list(APPEND GVSOC_TARGETS_DIRS_REAL "${subdir_real}")
 endforeach()
@@ -127,37 +127,21 @@ if(DEFINED GVSOC_TARGETS)
 
         message(STATUS "Generating GVSOC config to ${TARGET_CONFIG} with command: ")
 
-        # Gapy is used to extract the list of components out of the specified target
+        # gvrun extracts the list of components out of the specified target
+        set(GVRUN_CMD gvrun --target=${target} ${GVRUN_TARGETS_DIR_OPT}
+            --platform=gvsoc
+            --builddir=${CMAKE_CURRENT_BINARY_DIR}
+            --installdir=${CMAKE_INSTALL_PREFIX}/models
+            --component-file=${TARGET_CONFIG} components
+            --py-stack
+        )
 
-        # Targets carrying gvrun qualifiers (attr./config./timing) must be
-        # generated with gvrun: gapy cannot apply those qualifiers (in particular
-        # the global ``timing=<level>`` parameter, which only reaches gvrun's
-        # parameter registry), so the generated tree would not match the runtime
-        # systree. Matches ":attr.", ":config.", ":timing." and ":timing=".
-        if(DEFINED ENV{USE_GVRUN} OR target MATCHES ":(attr|config|timing)[.=]")
-            set(GAPY_CMD gvrun --target=${target} ${GAPY_TARGETS_DIR_OPT}
-                --platform=gvsoc
-                --builddir=${CMAKE_CURRENT_BINARY_DIR}
-                --installdir=${CMAKE_INSTALL_PREFIX}/models
-                --component-file=${TARGET_CONFIG} components
-                --py-stack
-            )
-        else()
-            set(GAPY_CMD gapy --target=${target} ${GAPY_TARGETS_DIR_OPT}
-                --platform=gvsoc
-                --builddir=${CMAKE_CURRENT_BINARY_DIR}
-                --installdir=${CMAKE_INSTALL_PREFIX}/models
-                --component-file=${TARGET_CONFIG} components
-                --py-stack
-            )
-        endif()
-
-        string(REPLACE ";"  " " GAPY_CMD_STR "    ${GAPY_CMD}")
-        message(STATUS ${GAPY_CMD_STR})
+        string(REPLACE ";"  " " GVRUN_CMD_STR "    ${GVRUN_CMD}")
+        message(STATUS ${GVRUN_CMD_STR})
 
         # We generate first the list of components for the specified target
         execute_process (
-            COMMAND ${GAPY_CMD} RESULT_VARIABLE ret
+            COMMAND ${GVRUN_CMD} RESULT_VARIABLE ret
         )
         if(NOT ret EQUAL "0")
             message( FATAL_ERROR "Caught error while generating gvsoc config")
@@ -277,7 +261,7 @@ endforeach()
 # =============================================
 # Per-target platform tree shared libraries
 # =============================================
-# Each target generates a <target>.tree.cpp during gapy components.
+# Each target generates a <target>.tree.cpp during gvrun components.
 # Compile each into a shared library installed alongside the models.
 # TREE_SOURCES is built from the current GVSOC_TARGETS loop — do NOT
 # glob ${TARGET_CONFIG_DIR}/*.tree.cpp here: stale files from previous
