@@ -2451,3 +2451,266 @@ any interaction from our model. It will for example automatically stop sending
 bytes if the RTS goes high and will resume as soon as it goes low. Some options
 are available to specify the dsigned behavior for the CTS signal used by the
 remote part to send us bytes.
+
+21 - How to build a target from scratch with PulpOS
+...................................................
+
+This tutorial builds a target with a single RISC-V core and a memory, and runs PulpOS on it.
+Contrary to tutorial 0, which compiles its application with a small hand-written runtime,
+the application here is compiled by gvrun with PulpOS, through a PulpOS port of the target.
+
+Everything is in the tutorial directory, the GVSoC target as well as the PulpOS port, so that a new
+target can be developed without touching GVSoC or PulpOS:
+
+- *my_target.py*: the GVSoC target.
+- *pulpos_port.py*: the PulpOS port, which describes how the applications are compiled for this
+  target.
+- *port/*: the code of the port: its HAL and IRQ functions, which the PulpOS kernel needs from the
+  target, and the linker script.
+- *config.py* and *test.c*: the application.
+- *Makefile*: compiles GVSoC with the target, compiles the application and runs it.
+
+The tutorial is located here: docs/developer_manual/tutorials/21_how_to_build_a_target_from_scratch_with_pulpos
+
+It is run with: ::
+
+    make build run
+
+Compiling GVSoC with the target
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+
+GVSoC is compiled in the SDK build, with the tutorial directory added as a directory of targets,
+so that only our target is compiled, the other models of the SDK are reused: ::
+
+    gvsoc:
+        $(MAKE) -C $(GVSOC_ROOT) TARGETS=$(TARGET) TARGETS_DIRS=$(CURDIR) GVSOC_ONLY=1 build
+
+The target is described in *my_target.py*. As every model, its parameters are in a configuration
+class, here the memory map and the core ISA. The configurations of the components are built from
+them:
+
+.. code-block:: python
+
+    class MySocConfig(Config):
+
+        mem_base: int = cfg_field(default=0x8000_0000, fmt="hex", dump=True, desc=(
+            "Base address of the memory"
+        ))
+
+        mem_size: int = cfg_field(default=0x10_0000, fmt="hex", dump=True, desc=(
+            "Size of the memory"
+        ))
+
+        isa: str = cfg_field(default='rv32imc', dump=True, desc=(
+            "ISA of the core"
+        ))
+
+        ...
+
+        def __post_init__(self):
+            super().__post_init__()
+            # No HTIF, PulpOS prints and exits through semihosting
+            self.core = RiscvConfig(isa=self.isa, htif=False)
+            self.mem = MemoryV3Config('mem', size=self.mem_size, latency=1)
+            self.ico = RouterConfig()
+            self.mem_mapping = RouterMapping(name='mem', base=self.mem_base, size=self.mem_size)
+
+The SoC contains the core, the memory, an interconnect between them, and an ELF loader. The loader
+writes the binary into the memory through the interconnect, then gives the entry point to the core
+and starts it:
+
+.. code-block:: python
+
+    mem    = Memory   (self, 'mem'   , config=config.mem )
+    ico    = Router   (self, 'ico'   , config=config.ico )
+    core   = Riscv    (self, 'core'  , config=config.core)
+    loader = ElfLoader(self, 'loader'                    )
+
+    ico.o_MAP(mem.i_INPUT(), mapping=config.mem_mapping)
+
+    core.o_FETCH(ico.i_INPUT(0))
+    core.o_DATA (ico.i_INPUT(1))
+
+    loader.o_OUT  (ico.i_INPUT(2) )
+    loader.o_START(core.i_FETCHEN())
+    loader.o_ENTRY(core.i_ENTRY() )
+
+The binary is not known when the target is described: gvrun compiles it from *config.py* and gives
+it to the target through the binary handler, which passes it to the loader:
+
+.. code-block:: python
+
+    self.loader = loader
+    self.register_binary_handler(self.handle_binary)
+
+    def configure(self) -> None:
+        binary = self.get_parameter('binary')
+        if binary is not None:
+            self.loader.set_binary(binary)
+
+    def handle_binary(self, binary: str):
+        self.set_parameter('binary', binary)
+
+The board adds the clock of the SoC, and the *Target* class is what gvrun instantiates for
+*--target=my_target*:
+
+.. code-block:: python
+
+    class Target(gvsoc.runner.Target):
+
+        gapy_description = "Single core and memory, running PulpOS"
+        model = MyBoard
+        name = ""
+        config = MyBoardConfig("my_target")
+
+The PulpOS port
+,,,,,,,,,,,,,,,
+
+PulpOS is made of a generic kernel and of a port for each target. The port gives the toolchain,
+the compilation flags, the linker script and a few functions of the HAL. PulpOS ports are usually in
+the PulpOS tree, and found by *pulpos.new_executable()* from the target name. Here the port is local,
+the application creates its executable directly from the port class instead.
+
+The executable, in *pulpos_port.py*, chooses the toolchain and the kernel features. The target has
+a single core and no interrupt controller, so the thread scheduler and the events are disabled:
+
+.. code-block:: python
+
+    class MyTargetExecutable(pulpos.PulposExecutable):
+
+        def __init__(self, name, target, parameters=None):
+
+            port_parameters = [
+                ('pulpos/kernel.threading', False),
+                ('pulpos/kernel.event', False),
+            ]
+            ...
+            super().__init__(name, target, parameters=port_parameters)
+
+            self.set_toolchain(RiscvGccToolchain(ToolchainConfig(path_from_env='RISCV32_GCC_TOOLCHAIN')))
+
+            self.pulpos = MyTargetPulposModule(target, container=self)
+
+The module contains the port code and the generic kernel. The generic kernel includes the HAL of the
+port as *<arch/<CONFIG_CHIP_FAMILY_NAME>/kernel/hal.h>*, so the port defines the family name and
+adds *port/* to the include paths, where the HAL is *port/arch/my_target/kernel/hal.h*. The kernel
+takes the IRQ functions from the header given by *CONFIG_IRQ_INC*, here
+*port/arch/my_target/kernel/irq.h*. *port/* is also added to the source paths, so that the port
+sources are given relative to it, wherever the port is. Their objects then go to the build
+directory:
+
+.. code-block:: python
+
+    PORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'port')
+
+    class MyTargetPulposModule(pulpos.PulposModule):
+
+        def __init__(self, target, container):
+            super().__init__(target, parent=container)
+
+            self.add_define('CONFIG_CHIP_NAME', 'my_target')
+            self.add_define('CONFIG_CHIP_FAMILY_NAME', 'my_target')
+            self.add_define('CONFIG_IRQ_INC', '<arch/my_target/kernel/irq.h>')
+            self.add_includes(PORT_DIR)
+            self.add_source_path(PORT_DIR)
+
+The port reads the memory map from the configuration of the GVSoC target, so that the software
+always matches the model. The linker script is generated from a template, where *@mem_start@* and
+*@mem_size@* are replaced by the memory of the target:
+
+.. code-block:: python
+
+    config = target.get_attributes()
+
+    linker_script = self.new_template_file('linker_script', 'link.ld', 'link.ld')
+    linker_script.add_parameter('mem_start', f'0x{config.soc.mem_base:x}')
+    linker_script.add_parameter('mem_size', f'0x{config.soc.mem_size:x}')
+    self.add_ldflags([f'-T{linker_script.get_path()}', '-Wl,--no-warn-rwx-segments'])
+
+The ISA flags also come from the target, then the port adds its sources and the generic kernel:
+
+.. code-block:: python
+
+    march = f'{config.soc.isa}_zicsr'
+    self.add_define('__RV32__', '1')
+    self.add_cflags([f'-march={march}', '-mabi=ilp32'])
+    self.add_ldflags([f'-march={march}', '-mabi=ilp32'])
+
+    self.add_sources(['hal.c'])
+
+    self.add_subdirectory(pulpos.get_home(self), target)
+
+The HAL gives the kernel the way to print and to exit. The target has no peripheral, so both go
+through semihosting, which the GVSoC core implements. A real chip would instead write to a UART
+and to an end-of-computation register:
+
+.. code-block:: cpp
+
+    static inline void __pi_libc_write(int fd, uint8_t *buffer, int len)
+    {
+        __pi_libc_semihost_write(fd, buffer, len);
+    }
+
+    static inline void __pi_init_platform_exit(int status)
+    {
+        __pi_libc_semihost_exit(status == 0 ? SEMIHOST_EXIT_SUCCESS : SEMIHOST_EXIT_ERROR);
+        while(1);
+    }
+
+It also gives the location of the interrupt vectors, placed by the linker script.
+
+*irq.h* gives the critical sections of the kernel, which mask the interrupts of the core:
+
+.. code-block:: cpp
+
+    static inline int pi_irq_lock()
+    {
+        int state;
+        __asm__ __volatile__ ("csrrc %0, %1, %2" : "=r" (state) : "I" (CSR_MSTATUS),
+            "I" (1 << CSR_MSTATUS_MIE_BIT) : "memory");
+        return state;
+    }
+
+    static inline void pi_irq_unlock(int state)
+    {
+        __asm__ __volatile__ ("csrw %0, %1" : : "I" (CSR_MSTATUS), "r" (state) : "memory");
+    }
+
+*port/hal.c* contains the functions which are not inline: the SoC initialization, called at boot,
+empty here, and the function called by printf for each character, which sends the output by lines.
+
+The application
+,,,,,,,,,,,,,,,
+
+*config.py* describes the application. It imports the port, which is next to it, and creates its
+executable from the port class, instead of calling *pulpos.new_executable()*:
+
+.. code-block:: python
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from pulpos_port import MyTargetExecutable
+
+
+    def declare(target):
+
+        test = MyTargetExecutable('test', target)
+
+        test.set_optimization_level('-Os -g')
+        test.add_sources('test.c')
+
+gvrun compiles it and runs it on the target, both with the tutorial directory as target directory: ::
+
+    GVRUN = $(INSTALLDIR)/bin/gvrun --target-dir=$(CURDIR) --target=$(TARGET) --work-dir=$(BUILDDIR)
+
+    app:
+        $(GVRUN) build
+
+    run:
+        $(GVRUN) run $(runner_args)
+
+Which prints: ::
+
+    Hello from my_target
+
+From there, peripherals can be added to the target like in the other tutorials, and their drivers to
+the port, in its sources and HAL.
