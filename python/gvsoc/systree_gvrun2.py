@@ -985,6 +985,8 @@ class Component(gvrun.target.SystemTreeNode):
 
         self.build_done = True
 
+        self.prepare_sources()
+
         if self.component is None and len(self.sources) != 0:
             self.generated_component = get_generated_component(self.sources, self.c_flags, self.libs)
             self.add_property('vp_component', self.generated_component.name)
@@ -1130,6 +1132,13 @@ class Component(gvrun.target.SystemTreeNode):
         self.bindings = after_clock + new_clock_bindings
 
     def finalize(self):
+        pass
+
+    def prepare_sources(self):
+        """Called once the whole tree is constructed, just before the sources and
+        C flags of this component are taken to name the module compiled for it:
+        the last place to add those which depend on what other constructors set
+        up after this one (e.g. a generated file named from its content)."""
         pass
 
     def __finalize(self):

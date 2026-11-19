@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import io
 import os.path
 
 c_head_pattern = """
@@ -64,7 +65,10 @@ class Header(object):
             os.makedirs(os.path.dirname(path))
         except:
             pass
-        self.file = open(path, 'w')
+        # Written to the file on close, only if it changes, so that what
+        # includes it is not rebuilt each time it is generated again
+        self.path = path
+        self.file = io.StringIO()
         self.name = name
         self.file.write(c_head_pattern)
         def_name = get_c_name(def_name).upper()
@@ -84,6 +88,13 @@ class Header(object):
     def close(self):
         self.file.write('\n')
         self.file.write('#endif\n')
+        content = self.file.getvalue()
+        if os.path.exists(self.path):
+            with open(self.path) as file:
+                if file.read() == content:
+                    return
+        with open(self.path, 'w') as file:
+            file.write(content)
 
 
 
