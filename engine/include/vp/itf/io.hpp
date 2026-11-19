@@ -131,6 +131,10 @@ namespace vp {
     inline int get_payload_size() { return IO_REQ_PAYLOAD_SIZE; }
     inline uint8_t *get_payload() { return payload; }
 
+    inline bool get_payload_valid() { return payload_valid; }
+    inline void set_payload_valid(bool valid) { payload_valid = valid; }
+    inline void set_payload_invalid() { payload_valid = false; }
+
     inline int get_nb_args() { return IO_REQ_NB_ARGS; }
     inline void **get_args() { return args; }
 
@@ -155,7 +159,7 @@ namespace vp {
 
     inline int arg_current_index() { return this->current_arg; }
 
-    inline void prepare() { latency = 0; duration=0; debug=false; }
+    inline void prepare() { latency = 0; duration=0; debug=false; payload_valid=false; }
     inline void init() {
       prepare(); current_arg=0;
 #ifdef VP_MEMCHECK_ACTIVE
@@ -196,6 +200,7 @@ namespace vp {
     uint64_t latency;
     uint64_t duration;
     uint8_t payload[IO_REQ_PAYLOAD_SIZE];
+    bool payload_valid = false;
     void *args[IO_REQ_NB_ARGS];
     int current_arg = 0;
   };
