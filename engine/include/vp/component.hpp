@@ -191,6 +191,23 @@ namespace vp
         bool has_tree_config() const { return this->tree_config != nullptr; }
 
         /**
+         * @brief Get the compiled tree config of this component.
+         *
+         * This is the full struct given by the Python generator, which can be
+         * a subclass of the config the component class copies into its own
+         * ``cfg`` (only that prefix is copied). It lets the parts of a model
+         * read the fields of the subclass, e.g. the core-specific fields of a
+         * RiscvConfig subclass.
+         *
+         * @tparam T The generated config struct the generator gave, or one of
+         *     its bases.
+         * @return The config, or nullptr if the component has no compiled
+         *     tree config.
+         */
+        template <typename T>
+        const T *get_tree_config() const { return static_cast<const T *>(this->tree_config); }
+
+        /**
          * @brief Overlay run-time-settable fields from the per-run runtime
          * config file onto a typed config struct pointed to by ``cfg``.
          *
