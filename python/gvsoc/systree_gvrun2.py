@@ -230,6 +230,27 @@ class Interface:
         self.comp.parent.interfaces.append(self)
 
 
+def _clock_binding_index(component) -> dict:
+    """Index of the clock bindings of a component, giving for each component
+    whose ``clock`` port it binds the first such binding, as
+    ``id(slave) -> (slave, clock_source, port)``.
+
+    Kept on the component and rebuilt when its bindings change: they are only
+    appended to or replaced, never modified in place, so the list object and
+    its length tell whether the index is still up to date.
+    """
+    bindings = component.bindings
+    cache = getattr(component, '_clock_index_cache', None)
+    if cache is None or cache[0] is not bindings or cache[1] != len(bindings):
+        index = {}
+        for binding in bindings:
+            if binding[3] == 'clock':
+                index.setdefault(id(binding[2]), (binding[2], binding[0], binding[1]))
+        cache = (bindings, len(bindings), index)
+        component._clock_index_cache = cache
+    return cache[2]
+
+
 class Component(gvrun.target.SystemTreeNode):
     """
     This class corresponds to a generic HW component from which any component should inherit.
@@ -703,9 +724,9 @@ class Component(gvrun.target.SystemTreeNode):
             parent = getattr(comp, 'parent', None)
             if parent is None or not hasattr(parent, 'bindings'):
                 return None
-            for binding in parent.bindings:
-                if binding[2] is comp and binding[3] == 'clock':
-                    return (binding[0], binding[1])
+            source = _clock_binding_index(parent).get(id(comp))
+            if source is not None and source[0] is comp:
+                return (source[1], source[2])
             comp = parent
         return None
 

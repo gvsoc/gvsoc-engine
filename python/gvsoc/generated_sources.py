@@ -23,8 +23,16 @@ several directories use the same names for different code: the bare names are
 made absolute here so that each directory gets its own module.
 """
 
+import functools
 import os
 import re
+
+
+@functools.lru_cache(maxsize=None)
+def _caller_dir(caller_file: str) -> str:
+    """Real directory of a Python file adding sources, resolved once per file:
+    it is asked for each component the file creates."""
+    return os.path.dirname(os.path.realpath(caller_file))
 
 
 def qualify_sources(sources: list[str], caller_file: str | None) -> list[str]:
@@ -32,7 +40,7 @@ def qualify_sources(sources: list[str], caller_file: str | None) -> list[str]:
     paths. The others, relative to the target directories, are kept."""
     if caller_file is None:
         return list(sources)
-    caller_dir = os.path.dirname(os.path.realpath(caller_file))
+    caller_dir = _caller_dir(caller_file)
     result = []
     for source in sources:
         if os.path.dirname(source) == '':
