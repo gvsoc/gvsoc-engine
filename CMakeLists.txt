@@ -260,16 +260,54 @@ foreach(component ${COMPONENTS})
         endforeach()
     endforeach()
 
+    # Libraries declared from the generator via Component.add_libraries():
+    # each one found on the CMake search paths is linked by its full path,
+    # and the include directory next to it is searched for its headers.
+    # Those outside the compiler's default paths need it, as Homebrew's on
+    # macOS (/opt/homebrew/lib, /opt/homebrew/include). One not found is
+    # linked by name, as before.
+    set(LIBS_LIST "")
+    set(LIBS_INCLUDES "")
+    if(NOT "${CONFIG_LIBS_${component}}" STREQUAL "")
+        string(REPLACE " " ";" LIBS_NAMES "${CONFIG_LIBS_${component}}")
+        foreach(lib ${LIBS_NAMES})
+            if(IS_ABSOLUTE "${lib}" OR lib MATCHES "^-")
+                list(APPEND LIBS_LIST "${lib}")
+                continue()
+            endif()
+            string(MAKE_C_IDENTIFIER "GVSOC_MODEL_LIB_${lib}" lib_var)
+            find_library(${lib_var} NAMES ${lib})
+            if(${lib_var})
+                list(APPEND LIBS_LIST "${${lib_var}}")
+                get_filename_component(lib_dir "${${lib_var}}" DIRECTORY)
+                get_filename_component(lib_inc "${lib_dir}/../include" ABSOLUTE)
+                if(IS_DIRECTORY "${lib_inc}" AND NOT lib_inc IN_LIST CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES)
+                    list(APPEND LIBS_INCLUDES "${lib_inc}")
+                endif()
+            else()
+                list(APPEND LIBS_LIST "${lib}")
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES LIBS_INCLUDES)
+    endif()
+
     vp_model(NAME ${component}
         SOURCES "${SRCS_LIST}"
         INCLUDES "${component_includes}"
     )
-    # Link any libraries declared from the generator via Component.add_libraries().
-    if(NOT "${CONFIG_LIBS_${component}}" STREQUAL "")
-        string(REPLACE " " ";" LIBS_LIST "${CONFIG_LIBS_${component}}")
+    if(NOT "${LIBS_LIST}" STREQUAL "")
         vp_model_link_libraries(NAME ${component}
             LIBRARY "${LIBS_LIST}"
         )
+    endif()
+    # As system directories: searched after the model ones, so that a header
+    # of a library prefix shared by many packages never shadows a model one
+    if(NOT "${LIBS_INCLUDES}" STREQUAL "")
+        foreach(TARGET_TYPE IN LISTS VP_TARGET_TYPES)
+            if(TARGET ${component}${TARGET_TYPE})
+                target_include_directories(${component}${TARGET_TYPE} SYSTEM PRIVATE ${LIBS_INCLUDES})
+            endif()
+        endforeach()
     endif()
 endforeach()
 
