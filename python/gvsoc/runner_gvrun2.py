@@ -491,14 +491,9 @@ class Runner():
         for child in getattr(component, 'components', {}).values():
             self._gen_legacy_sources(child, builddir, installdir)
 
-    def _collect_config_classes(self, component):
-        """Walk the component tree and collect unique Config classes for header generation.
-
-        Keyed by ``(__module__, __qualname__)`` so two Config classes that
-        share the same ``__name__`` but live in different modules (e.g. an
-        old and a new flavour of the same model) are both kept and emitted
-        to distinct headers.
-        """
+    def _collect_config_class_tree(self, config_cls):
+        """Collect a Config class with its dataclass bases and the classes of its
+        list and nested fields, keyed like :meth:`_collect_config_classes`."""
         from dataclasses import is_dataclass
         try:
             from gvrun.config_gen import get_config_fields
@@ -530,9 +525,23 @@ class Runner():
                 elif fld['cpp_type'] == 'nested':
                     _add(fld['nested_cls'])
 
+        _add(config_cls)
+        return classes
+
+    def _collect_config_classes(self, component):
+        """Walk the component tree and collect unique Config classes for header generation.
+
+        Keyed by ``(__module__, __qualname__)`` so two Config classes that
+        share the same ``__name__`` but live in different modules (e.g. an
+        old and a new flavour of the same model) are both kept and emitted
+        to distinct headers.
+        """
+        from dataclasses import is_dataclass
+
+        classes = {}
         config = getattr(component, '_component_config', None)
         if config is not None and is_dataclass(config):
-            _add(type(config))
+            classes.update(self._collect_config_class_tree(type(config)))
         for child in getattr(component, 'components', {}).values():
             classes.update(self._collect_config_classes(child))
         return classes
@@ -549,6 +558,10 @@ class Runner():
             return
 
         config_classes = self._collect_config_classes(target)
+        # Also the configs of the modules declared without being instantiated
+        for generated_component in target.get_generated_components().values():
+            for config_cls in generated_component.config_classes:
+                config_classes.update(self._collect_config_class_tree(config_cls))
         for config_cls in config_classes.values():
             mod_parts = config_cls.__module__.split('.')
             subdir = os.path.join(*mod_parts) if mod_parts and mod_parts[0] else ''

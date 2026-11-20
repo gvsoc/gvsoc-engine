@@ -98,13 +98,24 @@ class GeneratedComponent(object):
         self.name = f'gen_{comp_name}'
         self.comp_name = comp_name
         self.full_name = name
+        # Config classes the sources include the header of, for components declared
+        # without being instantiated (see get_generated_component)
+        self.config_classes = []
 
 
 
 # This takes care of computing if a new module has to be compiled for the specified set
 # of sources, cflags and libs, so that we can reuse one module for several instances
 # This is only for components which are fully handled from Python without cmake
-def get_generated_component(sources, cflags, libs):
+def get_generated_component(sources, cflags, libs, config_classes=None):
+    """Return the module compiled for the given sources, C flags and libraries,
+    registering it if it is not yet.
+
+    ``config_classes`` are the Config classes the sources include the header of.
+    Their headers are generated with those of the instantiated components, so
+    that a module declared without being instantiated (to have it built with a
+    target) still compiles.
+    """
     # Compute full name from sources, cflags and libs
     name = ''.join(sources + cflags + libs)
     # Compute a unique hash so that we don't compile with long name
@@ -129,7 +140,12 @@ def get_generated_component(sources, cflags, libs):
     if generated_components.get(comp_name) is None:
         generated_components[comp_name] = GeneratedComponent(name=name, comp_name=comp_name, sources=sources, cflags=cflags, libs=libs)
 
-    return generated_components[comp_name]
+    generated_component = generated_components[comp_name]
+    for config_cls in config_classes or []:
+        if config_cls not in generated_component.config_classes:
+            generated_component.config_classes.append(config_cls)
+
+    return generated_component
 
 
 class SlaveItf():
