@@ -93,8 +93,12 @@ class Header(object):
             with open(self.path) as file:
                 if file.read() == content:
                     return
-        with open(self.path, 'w') as file:
+        # Replaced atomically: the targets sharing this header can be generated
+        # in parallel
+        tmp_path = f'{self.path}.tmp.{os.getpid()}'
+        with open(tmp_path, 'w') as file:
             file.write(content)
+        os.replace(tmp_path, self.path)
 
 
 

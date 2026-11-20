@@ -116,15 +116,19 @@ set(TREE_SOURCES)
 
 # Lists the components of a target on a platform and generates its compiled tree
 # (<config>.tree.cpp). The RTL platform (the board running the RTL simulator) gets
-# its own tree, named with a .rtl suffix.
+# its own tree, named with a .rtl suffix. The command is only queued here: the
+# queued commands all run in parallel afterwards (gvsoc_run_target_components).
+set(TARGET_CONFIGS)
+set(GVSOC_GEN_COMMANDS_FILE ${TARGET_CONFIG_DIR}/components_commands.txt)
+file(WRITE ${GVSOC_GEN_COMMANDS_FILE} "")
+
 macro(gvsoc_target_components target platform suffix)
     string(REPLACE ","  "_" TARGET_NAME "${target}")
     string(REPLACE "/"  "." TARGET_NAME "${TARGET_NAME}")
     string(REPLACE ":"  "_" TARGET_NAME "${TARGET_NAME}")
     set(TARGET_CONFIG ${TARGET_CONFIG_DIR}/${TARGET_NAME}${suffix}.config)
     list(APPEND TREE_SOURCES ${TARGET_CONFIG_DIR}/${TARGET_NAME}${suffix}.tree.cpp)
-
-    message(STATUS "Generating GVSOC config to ${TARGET_CONFIG} with command: ")
+    list(APPEND TARGET_CONFIGS ${TARGET_CONFIG})
 
     # gvrun extracts the list of components out of the specified target
     set(GVRUN_CMD gvrun --target=${target} ${GVRUN_TARGETS_DIR_OPT}
@@ -135,18 +139,34 @@ macro(gvsoc_target_components target platform suffix)
         --py-stack
     )
 
-    string(REPLACE ";"  " " GVRUN_CMD_STR "    ${GVRUN_CMD}")
-    message(STATUS ${GVRUN_CMD_STR})
+    string(JOIN "\t" GVRUN_CMD_LINE ${GVRUN_CMD})
+    file(APPEND ${GVSOC_GEN_COMMANDS_FILE} "${GVRUN_CMD_LINE}\n")
+endmacro()
 
-    # We generate first the list of components for the specified target
+# Runs the queued component generations, in parallel (GVSOC_GEN_JOBS jobs, the
+# number of cores by default), then imports the components of each target
+macro(gvsoc_run_target_components)
+    if(NOT DEFINED GVSOC_GEN_JOBS)
+        cmake_host_system_information(RESULT GVSOC_GEN_JOBS QUERY NUMBER_OF_LOGICAL_CORES)
+    endif()
+
+    message(STATUS "Generating the components of the targets (${GVSOC_GEN_JOBS} jobs), "
+        "commands in ${GVSOC_GEN_COMMANDS_FILE}")
+
     execute_process (
-        COMMAND ${GVRUN_CMD} RESULT_VARIABLE ret
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/bin/gvsoc-gen-components
+            --jobs=${GVSOC_GEN_JOBS}
+            --times=${TARGET_CONFIG_DIR}/components_times.json
+            ${GVSOC_GEN_COMMANDS_FILE}
+        RESULT_VARIABLE ret
     )
     if(NOT ret EQUAL "0")
         message( FATAL_ERROR "Caught error while generating gvsoc config")
     endif()
 
-    import_kconfig(CONFIG_ ${TARGET_CONFIG} "COMPONENTS")
+    foreach(target_config ${TARGET_CONFIGS})
+        import_kconfig(CONFIG_ ${target_config} "COMPONENTS")
+    endforeach()
 endmacro()
 
 if(DEFINED GVSOC_TARGETS)
@@ -165,6 +185,8 @@ if(DEFINED GVSOC_TARGETS)
             gvsoc_target_components(${target} rtl ".rtl")
         endforeach()
     endif()
+
+    gvsoc_run_target_components()
 
 else()
     set(CONFIG_BUILD_ALL 1)

@@ -639,6 +639,8 @@ class Runner():
                         component_list.append(comp)
 
             component_list += self.target.get_component_list(c_flags) + ['vp.power_domain_impl', 'utils.composite_impl']
+            # Sorted, so that the file is the same from one generation to the next
+            component_list = sorted(component_list)
 
             with open(args.component_file, "w") as file:
                 file.write(f'CONFIG_COMPONENTS={" ".join(gen_comp_list)}\n')
