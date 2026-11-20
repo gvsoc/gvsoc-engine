@@ -803,6 +803,58 @@ class Component(gvrun.target.SystemTreeNode):
         """
         return self.get_attributes()
 
+    def build_tree(self):
+        """Build and finalize the whole hierarchy, without generating its JSON
+        configuration.
+
+        Does what :meth:`get_json_config` does to the components, in the same
+        order (a component is built, then its whole sub-hierarchy finalized,
+        then its children built), for targets which do not generate the JSON
+        configuration.
+        """
+        if not self.build_done:
+            self.__build()
+
+        if not self.finalize_done:
+            self.__finalize()
+
+        for component in self.components.values():
+            component.build_tree()
+
+    def get_json_property_components(self) -> list[tuple[str, list[str]]]:
+        """Return the components of the hierarchy whose model takes properties
+        from the JSON configuration.
+
+        Those are the components with a C++ model and properties but no typed
+        config, so that their properties can only reach the model through the
+        JSON configuration. The hierarchy must be built (:meth:`build_tree`).
+
+        Returns
+        -------
+        list[tuple[str, list[str]]]
+            The path of each such component, with the names of its properties.
+        """
+        result = []
+        if getattr(self, '_component_config', None) is None and \
+                'vp_component' in self.properties:
+            names = [name for name in self.properties
+                if name != 'vp_component' and name not in self.components]
+            if len(names) != 0:
+                result.append((self.get_path(), names))
+
+        for component in self.components.values():
+            result += component.get_json_property_components()
+
+        return result
+
+    def requires_systemc(self) -> bool:
+        """Tell if a component of the hierarchy needs the SystemC engine
+        (``require_systemc`` property)."""
+        if self.properties.get('require_systemc'):
+            return True
+
+        return any(component.requires_systemc() for component in self.components.values())
+
     def get_json_config(self):
         """Generates and return the system configuration.
 

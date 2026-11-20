@@ -1,3 +1,4 @@
+import os
 import cpu.iss.riscv
 import memory.memory
 import vp.clock_domain
@@ -26,68 +27,12 @@ class Soc(gvsoc.systree.Component):
         comp2.o_POWER_CTRL( comp.i_POWER  ())
         comp2.o_VOLTAGE_CTRL( comp.i_VOLTAGE())
 
-        # Main memory
-        mem = memory.memory.Memory(self, 'mem', size=0x00100000)
+        # Main memory, with the power numbers of its power model file
+        mem = memory.memory.Memory(self, 'mem', size=0x00100000,
+            power_model=os.path.join(os.path.dirname(__file__), 'mem_power.yaml'))
         # The memory needs to be connected with a mpping. The rm_base is used to substract
         # the global address to the requests address so that the memory only gets a local offset.
         ico.o_MAP(mem.i_INPUT(), 'mem', base=0x00000000, size=0x00100000, rm_base=True)
-
-        mem.add_properties({
-            "background": {
-                "dynamic": {
-                    "type": "linear",
-                    "unit": "W",
-
-                    "values": {
-                        "25": {
-                            "1.2": {
-                                "any": "0.0001"
-                            }
-                        }
-                    }
-                },
-                "leakage": {
-                    "type": "linear",
-                    "unit": "W",
-
-                    "values": {
-                        "25": {
-                            "1.2": {
-                                "any": "0.000001"
-                            }
-                        }
-                    }
-                }
-            },
-            "read_32": {
-                "dynamic": {
-                    "type": "linear",
-                    "unit": "pJ",
-
-                    "values": {
-                        "25": {
-                            "1.2": {
-                                "any": "1.5"
-                            }
-                        }
-                    }
-                }
-            },
-            "write_32": {
-                "dynamic": {
-                    "type": "linear",
-                    "unit": "pJ",
-
-                    "values": {
-                        "25": {
-                            "1.2": {
-                                "any": "2.5"
-                            }
-                        }
-                    }
-                }
-            }
-        })
 
 
 

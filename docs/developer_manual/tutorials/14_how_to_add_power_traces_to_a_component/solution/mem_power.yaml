@@ -1,0 +1,34 @@
+# Power model of the main memory: background power (dynamic and leakage, in W)
+# and energy per 32-bit access (in pJ), at 25 degrees and 1.2 V, whatever the
+# frequency.
+background:
+  dynamic:
+    type: linear
+    unit: W
+    values:
+      25.0:
+        1.2:
+          any: 0.0001
+  leakage:
+    type: linear
+    unit: W
+    values:
+      25.0:
+        1.2:
+          any: 0.000001
+read_32:
+  dynamic:
+    type: linear
+    unit: pJ
+    values:
+      25.0:
+        1.2:
+          any: 1.5
+write_32:
+  dynamic:
+    type: linear
+    unit: pJ
+    values:
+      25.0:
+        1.2:
+          any: 2.5

@@ -1766,72 +1766,56 @@ Some components already contain power models, and just need to be given some pow
 to contribute to the power consumption.
 
 For example, the memory model used in our system as the main memory can be given power numbers by
-giving them as component properties in the system generator:
+giving it a power model file, a YAML file next to the system generator:
+
+.. code-block:: yaml
+
+    background:
+      dynamic:
+        type: linear
+        unit: W
+        values:
+          25.0:
+            1.2:
+              any: 0.0001
+      leakage:
+        type: linear
+        unit: W
+        values:
+          25.0:
+            1.2:
+              any: 0.000001
+    read_32:
+      dynamic:
+        type: linear
+        unit: pJ
+        values:
+          25.0:
+            1.2:
+              any: 1.5
+    write_32:
+      dynamic:
+        type: linear
+        unit: pJ
+        values:
+          25.0:
+            1.2:
+              any: 2.5
+
+Each entry is a power source of the memory. Its values are given per temperature (in celsius), then
+per voltage (in V), then per frequency, ``any`` meaning that the value does not depend on the
+frequency.
+
+The system generator gives the path of this file to the memory:
 
 .. code-block:: python
 
-    # Main memory
-    mem = memory.memory.Memory(self, 'mem', size=0x00100000)
+    # Main memory, with the power numbers of its power model file
+    mem = memory.memory.Memory(self, 'mem', size=0x00100000,
+        power_model=os.path.join(os.path.dirname(__file__), 'mem_power.yaml'))
     # The memory needs to be connected with a mpping. The rm_base is used to substract
     # the global address to the requests address so that the memory only gets a local offset.
     ico.o_MAP(mem.i_INPUT(), 'mem', base=0x00000000, size=0x00100000, rm_base=True)
-
-    mem.add_properties({
-        "background": {
-            "dynamic": {
-                "type": "linear",
-                "unit": "W",
-
-                "values": {
-                    "25": {
-                        "1.2": {
-                            "any": "0.0001"
-                        }
-                    }
-                }
-            },
-            "leakage": {
-                "type": "linear",
-                "unit": "W",
-
-                "values": {
-                    "25": {
-                        "1.2": {
-                            "any": "0.000001"
-                        }
-                    }
-                }
-            }
-        },
-        "read_32": {
-            "dynamic": {
-                "type": "linear",
-                "unit": "pJ",
-
-                "values": {
-                    "25": {
-                        "1.2": {
-                            "any": "1.5"
-                        }
-                    }
-                }
-            }
-        },
-        "write_32": {
-            "dynamic": {
-                "type": "linear",
-                "unit": "pJ",
-
-                "values": {
-                    "25": {
-                        "1.2": {
-                            "any": "2.5"
-                        }
-                    }
-                }
-            }
-        }
-    })
 
 This model is able to first account background power which is the part of the power consumed
 whatever the memory is doing. It contains leakage power, which is accounted when memory is on,

@@ -23,6 +23,7 @@
 from __future__ import annotations
 import gvsoc.systree as st
 import gvsoc.json_tools as js
+import copy
 import os.path
 from gvsoc.gtkwave import Gtkwave_tree
 from gvsoc.gui import GuiConfig
@@ -52,13 +53,13 @@ def waitstatus_to_exitcode(status):
 
 
 
-def gen_config(args, config, cosim_mode):
+def gen_config(args, config, cosim_mode, require_systemc):
 
     full_config =  js.import_config(config, interpret=False, gen=False)
 
     gvsoc_config = full_config.get('target/gvsoc')
 
-    gvsoc_config.set('systemc', full_config.get('**/require_systemc') is not None)
+    gvsoc_config.set('systemc', require_systemc)
     gvsoc_config.set('werror', args.werror)
     gui_any = getattr(args, 'gui', None) or getattr(args, 'gui2', None) or getattr(args, 'gui3', None)
     gvsoc_config.set('events/use-external-dumper', bool(gui_any) and not cosim_mode)
@@ -195,19 +196,24 @@ def _strip_tree_data(config):
 PLATFORM_CONFIG_PATH = 'gvsoc_platform.json'
 
 
-def dump_config(full_config, gvsoc_config_path):
-    """Dump the engine options (target/gvsoc) to gvsoc_config_path and the
-    rest of the target to the platform config file."""
+def dump_config(full_config, gvsoc_config_path, platform_config=True):
+    """Dump the engine options (target/gvsoc) to gvsoc_config_path and, if
+    platform_config is True, the rest of the target to the platform config
+    file. Without it, the engine gets no platform config, and the components
+    are configured from the compiled platform tree alone."""
     target = full_config.get('target')
     gvsoc_config = target.items.pop('gvsoc')
-    try:
-        platform_path = os.path.join(os.path.dirname(gvsoc_config_path), PLATFORM_CONFIG_PATH)
-        with open(platform_path, 'w') as file:
-            file.write(target.dump_to_string())
-    finally:
-        target.items['gvsoc'] = gvsoc_config
+    if platform_config:
+        try:
+            platform_path = os.path.join(os.path.dirname(gvsoc_config_path), PLATFORM_CONFIG_PATH)
+            with open(platform_path, 'w') as file:
+                file.write(target.dump_to_string())
+        finally:
+            target.items['gvsoc'] = gvsoc_config
 
-    gvsoc_config.set('platform_config', PLATFORM_CONFIG_PATH)
+        gvsoc_config.set('platform_config', PLATFORM_CONFIG_PATH)
+    else:
+        target.items['gvsoc'] = gvsoc_config
     with open(gvsoc_config_path, 'w') as file:
         file.write(gvsoc_config.dump_to_string())
 
@@ -365,8 +371,27 @@ class Runner():
 
         [args, _] = parser.parse_known_args()
 
+        # Targets which do not need the JSON configuration (json_config = False)
+        # only get the engine options, their components are configured from the
+        # compiled platform tree alone
+        self.json_config = getattr(gapy_target, 'json_config', True)
+        if self.json_config:
+            target_config = self.target.get_json_config()
+        else:
+            self.target.build_tree()
+            json_components = self.target.get_json_property_components()
+            if len(json_components) != 0:
+                details = '\n'.join(f'  {path}: {", ".join(names)}'
+                    for path, names in json_components)
+                raise RuntimeError(
+                    f"Target '{getattr(gapy_target, 'name', '')}' does not generate the JSON "
+                    f"configuration (json_config = False), but these components take "
+                    f"properties from it:\n{details}\n"
+                    f"Give them a typed config, or remove json_config = False from the target.")
+            target_config = { 'gvsoc': copy.deepcopy(self.target.properties.get('gvsoc', {})) }
+
         self.full_config, self.gvsoc_config_path = gen_config(
-            args, { 'target': self.target.get_json_config() }, cosim_mode)
+            args, { 'target': target_config }, cosim_mode, self.target.requires_systemc())
 
         # Set the platform tree library path based on target name. Must mirror
         # the sanitisation done by CMake (gvsoc/engine/CMakeLists.txt) so the
@@ -663,7 +688,8 @@ class Runner():
             gvrun.commands.get_abspath(args, runtime_config_path))
         gvsoc_config.set('runtime_config', runtime_config_path)
 
-        dump_config(self.full_config, gvrun.commands.get_abspath(args, self.gvsoc_config_path))
+        dump_config(self.full_config, gvrun.commands.get_abspath(args, self.gvsoc_config_path),
+            platform_config=self.json_config)
 
         if norun:
             return
@@ -713,7 +739,7 @@ class Runner():
                     # runs the profile engine, or the debug one when debug mode is asked
                     # on the command line (needed for memcheck).
                     gui3_bin = 'gvsoc-gui3-sc' \
-                        if self.full_config.get('**/require_systemc') is not None \
+                        if gvsoc_config.get_bool('systemc') \
                         else 'gvsoc-gui3'
                     if args.debug_mode:
                         gui3_bin += '-debug'
@@ -762,7 +788,8 @@ class Runner():
                     self.full_config.set('target/gvsoc/proxy/enabled', True)
                     # The current directory is already the work dir, resolving the config
                     # path against args.work_dir again would break with a relative work dir
-                    dump_config(self.full_config, self.gvsoc_config_path)
+                    dump_config(self.full_config, self.gvsoc_config_path,
+                        platform_config=self.json_config)
 
                     run = pexpect.spawn(' '.join(command), encoding='utf-8', logfile=sys.stdout,
                         codec_errors='replace')
@@ -935,6 +962,11 @@ class Target(gvrun.target.Target):
     model: type[Component] = None
     name: str = ""
     config: object = None
+    # False when no component of the target takes parameters from the JSON
+    # configuration: the JSON configuration is then not generated at all, and
+    # the components are configured from the compiled platform tree alone.
+    # Generating the target fails if a component still needs JSON properties.
+    json_config: bool = True
 
     def __init__(self, parser, options=None, model=None, rtl_cosim_runner=None, description=None, name=None):
 

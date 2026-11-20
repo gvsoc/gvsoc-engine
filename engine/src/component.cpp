@@ -194,8 +194,10 @@ void vp::Component::bind_comps()
 
 void vp::Component::create_comps()
 {
-    // If we have a compiled tree node, use it for instantiation
-    if (this->tree_node != nullptr && this->tree_node->children != nullptr)
+    // With a compiled tree node, the tree alone gives the components. The JSON
+    // config is optional: a child gets its JSON node only when there is one,
+    // for the models which still read it.
+    if (this->tree_node != nullptr)
     {
         this->get_trace()->msg(vp::Trace::LEVEL_DEBUG, "Creating components from compiled tree\n");
 
@@ -206,8 +208,7 @@ void vp::Component::create_comps()
             const vp::ComponentTreeNode *child_node = &this->tree_node->children[i];
             std::string comp_name = child_node->name;
 
-            // Get the JSON config for this child (still needed for parameters)
-            js::Config *comp_config = config->get(comp_name);
+            js::Config *comp_config = config != nullptr ? config->get(comp_name) : nullptr;
 
             // Module name from compiled tree, fall back to default
             std::string vp_component;
@@ -228,6 +229,10 @@ void vp::Component::create_comps()
     {
         // Fall back to JSON-based instantiation
         js::Config *config = this->get_js_config();
+        if (config == nullptr)
+        {
+            return;
+        }
         js::Config *comps = config->get("vp_comps");
         if (comps == NULL)
         {
@@ -243,6 +248,11 @@ void vp::Component::create_comps()
                 std::string comp_name = x->get_str();
 
                 js::Config *comp_config = config->get(comp_name);
+                if (comp_config == nullptr)
+                {
+                    throw std::invalid_argument("No JSON config for component " + comp_name +
+                        " (component " + this->get_path() + " has no compiled tree)");
+                }
 
                 std::string vp_component = comp_config->get_child_str("vp_component");
 
@@ -288,12 +298,19 @@ vp::Component *vp::Component::load_component(js::Config *config, js::Config *gv_
     const vp::ComponentTreeNode *tree_node, vp::StatsEngine *stats_engine,
     vp::RuntimeConfig *runtime_config)
 {
-    std::string module_name = config->get_child_str("vp_component");
-
-    // If not in JSON, try the compiled tree node
-    if (module_name == "" && tree_node != nullptr && tree_node->vp_component != nullptr)
+    // The module comes from the compiled tree node, from the JSON config only
+    // for a component without one
+    std::string module_name;
+    if (tree_node != nullptr)
     {
-        module_name = tree_node->vp_component;
+        if (tree_node->vp_component != nullptr)
+        {
+            module_name = tree_node->vp_component;
+        }
+    }
+    else if (config != nullptr)
+    {
+        module_name = config->get_child_str("vp_component");
     }
 
     if (module_name == "")
@@ -566,6 +583,10 @@ void vp::Component::create_ports()
     }
 
     js::Config *config = this->get_js_config();
+    if (config == nullptr)
+    {
+        return;
+    }
     js::Config *ports = config->get("vp_ports");
     if (ports == NULL)
     {
@@ -628,8 +649,8 @@ void vp::Component::bind_ports(const char *master_comp_name, const char *master_
 
 void vp::Component::create_bindings()
 {
-    // Use compiled tree bindings if available
-    if (this->tree_node != nullptr && this->tree_node->bindings != nullptr)
+    // With a compiled tree node, the tree alone gives the bindings
+    if (this->tree_node != nullptr)
     {
         this->get_trace()->msg(vp::Trace::LEVEL_DEBUG, "Creating bindings from compiled tree\n");
 
@@ -643,6 +664,10 @@ void vp::Component::create_bindings()
     {
         // Fall back to JSON-based bindings
         js::Config *config = this->get_js_config();
+        if (config == nullptr)
+        {
+            return;
+        }
         js::Config *bindings = config->get("vp_bindings");
         if (bindings == NULL)
         {

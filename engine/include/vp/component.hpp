@@ -179,7 +179,11 @@ namespace vp
          * This configuration can be used to get the properties values associated to this instance
          * to take them into account in the model.
          *
-         * @return The JSON configuration of the component
+         * Deprecated: models take their parameters from their compiled tree config
+         * (see the ``Component(config, cfg)`` constructor). A component instantiated
+         * from the compiled tree may have no JSON configuration at all.
+         *
+         * @return The JSON configuration of the component, or nullptr if there is none
          */
         inline js::Config *get_js_config() { return js_config; }
 
