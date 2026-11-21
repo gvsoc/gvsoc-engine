@@ -98,6 +98,7 @@ vp::Top::Top(std::string config_path, std::string runtime_config_path, bool is_a
 
     // Load the per-target compiled tree if available
     const vp::ComponentTreeNode *platform_tree = nullptr;
+    const char *const *tree_strings = nullptr;
     js::Config *tree_lib_cfg = this->gv_config->get("platform_tree");
     if (tree_lib_cfg != nullptr)
     {
@@ -127,6 +128,16 @@ vp::Top::Top(std::string config_path, std::string runtime_config_path, bool is_a
                 " has no vp_get_platform_tree entry point");
         }
         platform_tree = get_tree();
+
+        auto get_strings = (const char *const *(*)(int *))dlsym(tree_lib,
+            "vp_platform_tree_strings");
+        if (get_strings == nullptr)
+        {
+            throw std::runtime_error("Platform tree " + tree_lib_path +
+                " has no vp_platform_tree_strings entry point");
+        }
+        int nb_strings;
+        tree_strings = get_strings(&nb_strings);
     }
 
     this->time_engine = new vp::TimeEngine(this->gv_config);
@@ -137,7 +148,7 @@ vp::Top::Top(std::string config_path, std::string runtime_config_path, bool is_a
 
     this->top_instance = vp::Component::load_component(platform_config, this->gv_config,
         NULL, "", this->time_engine, this->trace_engine, this->power_engine, this->memcheck,
-        platform_tree, this->stats_engine, this->runtime_config);
+        platform_tree, this->stats_engine, this->runtime_config, tree_strings);
 
     // The whole tree is built, any leftover runtime config key is a typo or
     // a stale file. Only checked when the compiled tree was used: the JSON

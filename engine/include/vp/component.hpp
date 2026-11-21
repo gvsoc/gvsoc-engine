@@ -66,11 +66,12 @@ namespace vp
             vp::PowerEngine *power_engine, vp::MemCheck *memcheck,
             const vp::ComponentTreeNode *tree_node = nullptr,
             vp::StatsEngine *stats_engine = nullptr,
-            vp::RuntimeConfig *runtime_config = nullptr)
+            vp::RuntimeConfig *runtime_config = nullptr,
+            const char *const *tree_strings = nullptr)
             : name(name), parent(parent), config(config), gv_config(gv_config),
             time_engine(time_engine), trace_engine(trace_engine), power_engine(power_engine),
             memcheck(memcheck), tree_node(tree_node), stats_engine(stats_engine),
-            runtime_config(runtime_config) {}
+            runtime_config(runtime_config), tree_strings(tree_strings) {}
         std::string name;
         vp::Component *parent;
         js::Config *config;
@@ -82,6 +83,7 @@ namespace vp
         const vp::ComponentTreeNode *tree_node;
         vp::StatsEngine *stats_engine;
         vp::RuntimeConfig *runtime_config;
+        const char *const *tree_strings;
     };
 
     /**
@@ -270,7 +272,8 @@ namespace vp
             vp::PowerEngine *power_engine, vp::MemCheck *memcheck,
             const vp::ComponentTreeNode *tree_node = nullptr,
             vp::StatsEngine *stats_engine = nullptr,
-            vp::RuntimeConfig *runtime_config = nullptr);
+            vp::RuntimeConfig *runtime_config = nullptr,
+            const char *const *tree_strings = nullptr);
 
         // Used by the launcher to set himself as launcher. Could be moved to ComponentConfig
         void set_launcher(gv::Controller *launcher);
@@ -295,6 +298,8 @@ namespace vp
         void create_bindings();
         void bind_ports(const char *master_comp, const char *master_port,
             const char *slave_comp, const char *slave_port);
+        // Binding of the compiled tree, components and ports given by index
+        void bind_tree_ports(int master_comp, int master_port, int slave_comp, int slave_port);
 
         // Do the connectins between master and slave ports
         void bind_comps();
@@ -374,6 +379,9 @@ namespace vp
 
         // Pointer to constexpr config from the compiled tree
         const void *tree_config = nullptr;
+
+        // String table of the compiled tree, indexed by the string fields of its nodes
+        const char *const *tree_strings = nullptr;
 
         // Per-run runtime config values, for overlaying runtime fields and
         // passing to children

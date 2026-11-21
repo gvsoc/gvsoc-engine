@@ -28,21 +28,31 @@
 // that a tree built against another layout is refused instead of misread.
 // Bump it at each change of these structures, with the GUI mirror of them
 // (TREE_LAYOUT_VERSION in gvsoc/gui src/model_graph.cpp).
-#define VP_COMPONENT_TREE_VERSION 2
+//
+// All the strings of the tree (component, module, port, mapping, runtime field
+// and signature names) are indexes in the string table of the tree
+// (vp_platform_tree_strings), -1 for none.
+#define VP_COMPONENT_TREE_VERSION 4
 
 namespace vp {
 
 /**
  * @brief A port-to-port binding between two components.
+ *
+ * Components and ports are given by index: a component is -1 for the component
+ * holding the binding ("self"), otherwise the index of the child in its children
+ * array, and a port is the index of the port in the ports array of that
+ * component node. The signatures are indexes in the string table of the tree,
+ * only used by tools like the GUI.
  */
 struct TreeBinding
 {
-    const char *master_comp;        // "self" or child name
-    const char *master_port;        // Port name on master
-    const char *slave_comp;         // "self" or child name
-    const char *slave_port;         // Port name on slave
-    const char *master_signature;   // Master-port signature label, or nullptr
-    const char *slave_signature;    // Slave-port signature label, or nullptr
+    int master_comp;                // -1 for self, otherwise child index
+    int master_port;                // Index in the ports of the master node
+    int slave_comp;                 // -1 for self, otherwise child index
+    int slave_port;                 // Index in the ports of the slave node
+    int master_signature;           // Index in the string table, or -1
+    int slave_signature;            // Index in the string table, or -1
 };
 
 /**
@@ -72,7 +82,7 @@ enum RuntimeFieldType
  */
 struct RuntimeField
 {
-    const char *name;               // Field name (last element of the runtime config key)
+    int name;                       // Field name (last element of the runtime config key), index in the string table
     unsigned int offset;            // Offset of the field (or list count) inside the config struct
     RuntimeFieldType type;          // Type of the overlay
     unsigned int ptr_offset = 0;    // For lists: offset of the element array pointer
@@ -90,7 +100,7 @@ struct RuntimeField
  */
 struct TreeMapping
 {
-    const char *name;           // Target port name
+    int name;                   // Target port name, index in the string table
     uint64_t base;              // Base address
     uint64_t size;              // Range size in bytes (0: catch-all)
 };
@@ -104,30 +114,30 @@ struct TreeMapping
  */
 struct ComponentTreeNode
 {
-    const char *name;                    // Component name (e.g. "rom", "bank_0")
+    int name;                            // Component name (e.g. "rom", "bank_0"), index in the string table
     const void *config;                  // Pointer to config struct (static or constexpr), or nullptr
     const ComponentTreeNode *children;   // Array of child nodes (nullptr if leaf)
     int num_children;                    // Number of children
-    const char *vp_component;            // Module name (.so), or nullptr for default
+    int vp_component;                    // Module name (.so), index in the string table, or -1 for default
     const TreeBinding *bindings;         // Array of bindings, or nullptr
     int num_bindings;                    // Number of bindings
     const RuntimeField *runtime_fields;  // Runtime-settable field table, or nullptr
     int num_runtime_fields;              // Number of runtime-settable fields
     const TreeMapping *mappings;         // Address mappings (interconnects), or nullptr
     int num_mappings;                    // Number of address mappings
-    const char *const *ports;            // Names of the component ports, or nullptr
+    const int *ports;                    // Names of the component ports, indexes in the string table, or nullptr
     int num_ports;                       // Number of ports
 
     /**
      * @brief Find a child node by name.
      * @return Pointer to the child node, or nullptr if not found.
      */
-    const ComponentTreeNode *find_child(const char *child_name) const
+    const ComponentTreeNode *find_child(const char *const *strings, const char *child_name) const
     {
         if (children == nullptr) return nullptr;
         for (int i = 0; i < num_children; i++)
         {
-            if (strcmp(children[i].name, child_name) == 0)
+            if (strcmp(strings[children[i].name], child_name) == 0)
                 return &children[i];
         }
         return nullptr;
@@ -143,3 +153,9 @@ struct ComponentTreeNode
  * Returns nullptr if the target has no compiled tree.
  */
 extern "C" const vp::ComponentTreeNode *vp_get_platform_tree();
+
+/**
+ * @brief String table of the tree, indexed by the string fields of the tree
+ * structures. The number of strings is returned in nb_strings.
+ */
+extern "C" const char *const *vp_platform_tree_strings(int *nb_strings);

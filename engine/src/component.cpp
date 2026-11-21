@@ -206,15 +206,15 @@ void vp::Component::create_comps()
         for (int i = 0; i < this->tree_node->num_children; i++)
         {
             const vp::ComponentTreeNode *child_node = &this->tree_node->children[i];
-            std::string comp_name = child_node->name;
+            std::string comp_name = this->tree_strings[child_node->name];
 
             js::Config *comp_config = config != nullptr ? config->get(comp_name) : nullptr;
 
             // Module name from compiled tree, fall back to default
             std::string vp_component;
-            if (child_node->vp_component != nullptr)
+            if (child_node->vp_component >= 0)
             {
-                vp_component = child_node->vp_component;
+                vp_component = this->tree_strings[child_node->vp_component];
             }
             else
             {
@@ -296,16 +296,16 @@ vp::Component *vp::Component::load_component(js::Config *config, js::Config *gv_
     vp::Component *parent, std::string name, vp::TimeEngine *time_engine,
     vp::TraceEngine *trace_engine, vp::PowerEngine *power_engine, vp::MemCheck *memcheck,
     const vp::ComponentTreeNode *tree_node, vp::StatsEngine *stats_engine,
-    vp::RuntimeConfig *runtime_config)
+    vp::RuntimeConfig *runtime_config, const char *const *tree_strings)
 {
     // The module comes from the compiled tree node, from the JSON config only
     // for a component without one
     std::string module_name;
     if (tree_node != nullptr)
     {
-        if (tree_node->vp_component != nullptr)
+        if (tree_node->vp_component >= 0)
         {
-            module_name = tree_node->vp_component;
+            module_name = tree_strings[tree_node->vp_component];
         }
     }
     else if (config != nullptr)
@@ -370,7 +370,7 @@ vp::Component *vp::Component::load_component(js::Config *config, js::Config *gv_
     if (gv_new)
     {
         ComponentConf conf(name, parent, config, gv_config, time_engine, trace_engine,
-            power_engine, memcheck, tree_node, stats_engine, runtime_config);
+            power_engine, memcheck, tree_node, stats_engine, runtime_config, tree_strings);
         return gv_new(conf);
     }
 
@@ -416,7 +416,7 @@ vp::Component *vp::Component::new_component(std::string name, js::Config *config
 {
     vp::Component *instance = vp::Component::load_component(config, this->gv_config, this, name,
         this->time.get_engine(), this->traces.get_trace_engine(), this->power.get_engine(), this->memcheck,
-        child_tree_node, this->stats.get_engine(), this->runtime_config);
+        child_tree_node, this->stats.get_engine(), this->runtime_config, this->tree_strings);
 
     this->get_trace()->msg(vp::Trace::LEVEL_DEBUG, "New component (name: %s)\n", name.c_str());
 
@@ -474,7 +474,7 @@ void vp::Component::apply_runtime_overrides(void *cfg)
     for (int i = 0; i < n; i++)
     {
         const vp::RuntimeField &f = table[i];
-        std::string key = prefix + f.name;
+        std::string key = prefix + this->tree_strings[f.name];
 
         if (f.type == vp::RUNTIME_LIST)
         {
@@ -497,7 +497,7 @@ void vp::Component::apply_runtime_overrides(void *cfg)
                 {
                     const vp::RuntimeField &elem_field = f.elem_fields[k];
                     const std::string *value =
-                        this->runtime_config->get(elem_key + elem_field.name);
+                        this->runtime_config->get(elem_key + this->tree_strings[elem_field.name]);
                     if (value != nullptr)
                     {
                         vp::Component::apply_runtime_field(elems + j * f.elem_size,
@@ -533,6 +533,7 @@ vp::Component::Component(vp::ComponentConf &config)
     this->gv_config = config.gv_config;
     this->tree_node = config.tree_node;
     this->runtime_config = config.runtime_config;
+    this->tree_strings = config.tree_strings;
 
     // Assign typed config from the compiled tree
     if (this->tree_node != nullptr)
@@ -577,7 +578,7 @@ void vp::Component::create_ports()
     {
         for (int i = 0; i < this->tree_node->num_ports; i++)
         {
-            this->create_port(this->tree_node->ports[i]);
+            this->create_port(this->tree_strings[this->tree_node->ports[i]]);
         }
         return;
     }
@@ -647,6 +648,41 @@ void vp::Component::bind_ports(const char *master_comp_name, const char *master_
     master_port->bind_to_virtual(slave_port);
 }
 
+void vp::Component::bind_tree_ports(int master_comp_id, int master_port_id, int slave_comp_id,
+    int slave_port_id)
+{
+    // Components are given by their index in the children of the tree node (-1 for
+    // this one), which is also their index in child_components, and ports by
+    // their index in the ports of their tree node
+    vp::Component *master_comp = master_comp_id < 0 ? this : this->child_components[master_comp_id];
+    vp::Component *slave_comp = slave_comp_id < 0 ? this : this->child_components[slave_comp_id];
+    const vp::ComponentTreeNode *master_node = master_comp_id < 0 ? this->tree_node :
+        &this->tree_node->children[master_comp_id];
+    const vp::ComponentTreeNode *slave_node = slave_comp_id < 0 ? this->tree_node :
+        &this->tree_node->children[slave_comp_id];
+    const char *master_port_name = this->tree_strings[master_node->ports[master_port_id]];
+    const char *slave_port_name = this->tree_strings[slave_node->ports[slave_port_id]];
+
+    this->get_trace()->msg(vp::Trace::LEVEL_DEBUG, "Creating binding (%s:%s -> %s:%s)\n",
+        master_comp->get_name().c_str(), master_port_name, slave_comp->get_name().c_str(),
+        slave_port_name);
+
+    vp::Port *master_port = master_comp->get_port(master_port_name);
+    vp::Port *slave_port = slave_comp->get_port(slave_port_name);
+
+    vp_assert_always(master_port != NULL, this->get_trace(),
+        "Binding from invalid master port (master: %s / %s, slave: %s / %s)\n",
+        master_comp->get_name().c_str(), master_port_name, slave_comp->get_name().c_str(),
+        slave_port_name);
+
+    vp_assert_always(slave_port != NULL, this->get_trace(),
+        "Binding from invalid slave port (master: %s / %s, slave: %s / %s)\n",
+        master_comp->get_name().c_str(), master_port_name, slave_comp->get_name().c_str(),
+        slave_port_name);
+
+    master_port->bind_to_virtual(slave_port);
+}
+
 void vp::Component::create_bindings()
 {
     // With a compiled tree node, the tree alone gives the bindings
@@ -657,7 +693,7 @@ void vp::Component::create_bindings()
         for (int i = 0; i < this->tree_node->num_bindings; i++)
         {
             const vp::TreeBinding &b = this->tree_node->bindings[i];
-            this->bind_ports(b.master_comp, b.master_port, b.slave_comp, b.slave_port);
+            this->bind_tree_ports(b.master_comp, b.master_port, b.slave_comp, b.slave_port);
         }
     }
     else
