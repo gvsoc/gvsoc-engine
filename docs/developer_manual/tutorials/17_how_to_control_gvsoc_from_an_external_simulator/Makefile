@@ -19,7 +19,8 @@ all:
 
 gvsoc:
 	make -C $(GVSOC_ROOT) TARGETS=my_system MODULES=$(CURDIR) BUILDDIR=$(FULL_BUILDDIR)/build INSTALLDIR=$(FULL_BUILDDIR)/install GVSOC_ONLY=1 $(OPTIONS) build
-	g++ -o launcher launcher.cpp -I$(GVSOC_ENGINE)/engine/include -L$(FULL_BUILDDIR)/install/lib -lpulpvp
+	g++ -o launcher launcher.cpp -I$(GVSOC_ENGINE)/engine/include -L$(FULL_BUILDDIR)/install/lib -lpulpvp \
+	  -Wl,-rpath,$(FULL_BUILDDIR)/install/lib
 
 prepare:
 	cp solution/* .
