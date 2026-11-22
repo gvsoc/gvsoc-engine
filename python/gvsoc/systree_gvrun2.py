@@ -1102,8 +1102,10 @@ class Component(gvrun.target.SystemTreeNode):
         component's existing clock binding so the framework-injected bridge
         is fully clocked without the user having to wire it manually.
         """
+        if not self.bindings:
+            return
         from gvsoc.signature import IoV2BigPacket, IoV2Sync, IoV2Beat
-        from gvsoc.signature import assert_io_v2_strict
+        from gvsoc.signature import assert_io_v2_strict, is_loose_io_v2
         from gvsoc import clock_bridges
         expanded = []
         # Pre-index existing clock bindings so we can clone the master's
@@ -1122,10 +1124,12 @@ class Component(gvrun.target.SystemTreeNode):
             # io_v2 (bare 'io_v2' string or IoV2BigPacket) on either end,
             # unless the escape hatch is enabled. Runs before the
             # isinstance(Signature) skip so a bare-string master is caught too.
-            assert_io_v2_strict(
-                master_sig, slave_sig,
-                f'{binding[0].get_path()}:{binding[1]} -> '
-                f'{binding[2].get_path()}:{binding[3]}')
+            # The binding is only described when it is rejected.
+            if is_loose_io_v2(master_sig) or is_loose_io_v2(slave_sig):
+                assert_io_v2_strict(
+                    master_sig, slave_sig,
+                    f'{binding[0].get_path()}:{binding[1]} -> '
+                    f'{binding[2].get_path()}:{binding[3]}')
             if not isinstance(master_sig, Signature):
                 expanded.append(binding)
                 continue
