@@ -306,20 +306,28 @@ class Component(gvrun.target.SystemTreeNode):
             parent.__add_component(name, self)
 
         if config is not None:
-            from gvrun.systree import get_attribute_arg_value
-            for f in fields(config):
-                # Only process the fields which has been assigned
-                if hasattr(config, f.name):
-                    path = self.get_path() + '/' + f.name
-                    self.__apply_cmdline_parameter(config, f.name, path)
-                    value = getattr(config, f.name)
-                    if isinstance(value, (int, bool, str)):
-                        # Check for attribute override using the component path
-                        override = get_attribute_arg_value(path)
-                        if override is not None:
-                            value = type(value)(override)
-                            setattr(config, f.name, value)
-                        self.add_property(f.name, value)
+            # The config fields are given to the model through the compiled
+            # platform tree: they are not copied into the properties. They can
+            # still be overridden from the command line, with the path of the
+            # component, which is only looked at when some override is given.
+            from gvrun.systree import get_attribute_arg_value, has_attribute_args
+            from gvrun.parameter import has_cmdline_parameters
+            has_parameters = has_cmdline_parameters()
+            has_attributes = has_attribute_args()
+            if has_parameters or has_attributes:
+                for f in fields(config):
+                    # Only process the fields which has been assigned
+                    if hasattr(config, f.name):
+                        path = self.get_path() + '/' + f.name
+                        if has_parameters:
+                            self.__apply_cmdline_parameter(config, f.name, path)
+                        if has_attributes:
+                            value = getattr(config, f.name)
+                            if isinstance(value, (int, bool, str)):
+                                # Check for attribute override using the component path
+                                override = get_attribute_arg_value(path)
+                                if override is not None:
+                                    setattr(config, f.name, type(value)(override))
 
     def __apply_cmdline_parameter(self, config, field_name: str, path: str):
         """Apply the --parameter value given for a config field, if any.
